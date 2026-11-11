@@ -1,0 +1,23 @@
+# docker compose -f docker/uc2-flasher/compose.yml up --build   (from the repo root)
+services:
+  flasher:
+    build:
+      context: ../..
+      dockerfile: docker/uc2-flasher/Dockerfile
+    ports:
+      - "8004:8004"
+    volumes:
+      - /dev:/dev              # boards re-enumerate while flashing; a fixed --device would go stale
+      - /run/udev:/run/udev:ro # port descriptions / VID:PID for chip detection
+    device_cgroup_rules:
+      - 'a 188:* rwm' # USB-UART, e.g. /dev/ttyUSB0 (CAN HAT)
+      - 'a 166:* rwm' # native USB, e.g. /dev/ttyACM0 (XIAO)
+    group_add:
+      - dialout
+    environment:
+      - FIRMWARE_URL=http://host.docker.internal/firmware  # firmware pallet via Caddy
+      # - FIRMWARE_RELEASE=latest                          # or a GitHub release instead
+      - IMSWITCH_URL=http://host.docker.internal:8001      # refuse to share the port with ImSwitch
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped

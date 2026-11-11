@@ -1,0 +1,4 @@
+uc2-rest>=0.2.0.43
+esptool
+pyserial>=3.4
+requests>=2.25
