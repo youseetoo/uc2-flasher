@@ -27,7 +27,7 @@ export function setMode(useServer) {
 export async function loadPorts() {
   const ports = await api('ports');
   const html = ports.map((p) => `<option value="${esc(p.device)}">${esc(p.device)} — ${esc(p.description)}</option>`).join('');
-  for (const id of ['serverPort', 'flashPort']) {
+  for (const id of ['serverPort', 'flashPort', 'erasePort']) {
     const keep = $(id).value;
     $(id).innerHTML = html || '<option value="">no serial port</option>';
     if (keep) $(id).value = keep;
@@ -71,13 +71,22 @@ export async function flashBoard(board, release) {
   if (!name) return msg(`esp32_${board.env}[_merged].bin is not on ${$('mSource').textContent}`, 'error');
   const port = $('flashPort').value;
   if (!confirm(`Flash ${name} onto ${port}? Saved settings on the board are reset.`)) return msg('');
-  watchFlash = true;
+  watchUsb((st, done) => {
+    if (st.progress >= 0) $('serverFlashBar').style.width = `${st.progress}%`;
+    show('serverFlashMsg', st);
+    if (done && !['failed', 'error'].includes(st.status)) onFlashed();
+  });
   show('serverFlashMsg', await api('flash', {
     port, firmware_filename: name, erase_flash: $('flashErase').checked,
     chip: board.chip.toLowerCase().replace('-', ''),
   }));
 }
-let watchFlash = false, onFlashed = () => {};
+let onFlashed = () => {};
+
+// Follow the server's USB job (flash or erase): fn(status, done) on every poll until it ends
+const USB_DONE = ['success', 'warning', 'failed', 'error', 'cancelled'];
+let usbWatch = null;
+export function watchUsb(fn) { usbWatch = fn; }
 
 // ── All boards ───────────────────────────────────────────────────────────
 let devices = [];
@@ -118,13 +127,10 @@ let logSeq = 0;
 async function poll() {
   try {
     const s = await api(`status?since=${logSeq}`);
-    if (watchFlash && s.usb.status !== 'idle') {
-      if (s.usb.progress >= 0) $('serverFlashBar').style.width = `${s.usb.progress}%`;
-      show('serverFlashMsg', s.usb);
-      if (['success', 'warning', 'failed', 'error'].includes(s.usb.status)) {
-        watchFlash = false;
-        if (s.usb.status !== 'failed' && s.usb.status !== 'error') onFlashed();
-      }
+    if (usbWatch && s.usb.status !== 'idle') {
+      const fn = usbWatch, done = USB_DONE.includes(s.usb.status);
+      if (done) usbWatch = null;
+      fn(s.usb, done);
     }
     const o = otaWatch !== null && s.ota[otaWatch];
     if (o) { $('mOtaBar').style.width = `${o.progress}%`; show('mOtaMsg', o); }

@@ -19,9 +19,11 @@ import importlib.util
 import json
 import logging
 import os
+import struct
 import sys
 import tempfile
 import threading
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
@@ -144,11 +146,15 @@ def imswitch_blockers() -> list:
             "Stop it, or use its own firmware page."]
 
 
-def _background(fn, *args, **kwargs) -> dict:
-    """Refuse while the serial port is in use, else run *fn* in a thread."""
+def _background(fn, *args, usb_job=False, **kwargs) -> dict:
+    """Refuse while the serial port is in use, else run *fn* in a thread.
+    usb_job: reset the USB status first, so pollers do not see the last job's result."""
     busy = net.guard.busy_reasons()
     if busy or net.updater.state.get("state") == "running":
         return {"status": "busy", "message": (busy or ["A firmware update is running."])[0]}
+    if usb_job:
+        net.usb.status = {"status": "starting", "progress": 0, "message": "Starting…",
+                          "details": None}
     threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
     return {"status": "started"}
 
@@ -206,7 +212,72 @@ def flash(port=None, firmware_filename=None, chip="auto", erase_flash=False, bau
     return _background(net.usb.flash, port=port or link.current_port(),
                        firmware_filename=firmware_filename or None, chip=chip,
                        erase_flash=bool(erase_flash), baud=int(baud),
-                       reconnect_after=own, skip_disconnect=not own)
+                       reconnect_after=own, skip_disconnect=not own, usb_job=True)
+
+
+def nvs_partition(table: bytes):
+    """(offset, size) of the NVS partition (type 1, subtype 2) in an ESP-IDF partition
+    table, or None. Mirrors parsePartitionTable in js/flasher/erase.js."""
+    for i in range(0, len(table) - 31, 32):
+        if table[i:i + 2] != b"\xaa\x50":
+            break
+        if table[i + 2] == 1 and table[i + 3] == 2:
+            return struct.unpack_from("<II", table, i + 4)
+    return None
+
+
+def erase(port=None, mode="nvs", chip="auto"):
+    """esptool erase on the server. mode "nvs": only the settings partition (node id, role,
+    positions), "all": the whole chip (flash a firmware afterwards)."""
+    if mode not in ("nvs", "all"):
+        return {"status": "error", "message": "mode must be 'nvs' or 'all'"}
+    port = port or link.current_port()
+    if not port:
+        return {"status": "error", "message": "No serial port given."}
+    return _background(_erase, port, mode, chip, port == link.current_port(), usb_job=True)
+
+
+def _erase(port, mode, chip, own):
+    usb = net.usb
+    if not net.guard.usb.acquire(blocking=False):
+        return usb._emit("failed", 0, "A USB flash is already running.")
+    try:
+        usb.cancel_event.clear()
+        if own:
+            usb._emit("disconnecting", 5, f"Releasing {port}…")
+            link.release()
+            time.sleep(0.5)
+        if chip in (None, "", "auto"):
+            chip = usb.detect_chip(port) or "auto"
+        common = ["--port", port, "--chip", chip]
+        if mode == "all":
+            usb._emit("erasing", 10, "Erasing the whole flash (30–120 s)…")
+            ok, output = usb._esptool(common + ["erase-flash"])
+        else:
+            usb._emit("erasing", 10, "Reading the partition table…")
+            with tempfile.TemporaryDirectory() as tmp:
+                table = Path(tmp) / "partitions.bin"
+                ok, output = usb._esptool(common + ["read-flash", "0x8000", "0xc00", str(table)])
+                region = nvs_partition(table.read_bytes()) if ok and table.exists() else None
+            if ok and region is None:
+                ok, output = False, "No NVS partition in the partition table."
+            if ok:
+                offset, size = region
+                usb._emit("erasing", 50, f"Erasing NVS at {offset:#x} ({size:#x} bytes)…")
+                ok, output = usb._esptool(common + ["erase-region", hex(offset), hex(size)])
+        if ok:
+            usb._emit("success", 100, "Settings erased (node id, role, positions back to the "
+                                      "build defaults)" if mode == "nvs"
+                      else "Flash erased — flash a firmware next")
+        else:
+            usb._emit("failed", 0, "Erase failed", output)
+    finally:
+        if own and mode == "nvs":  # a blank chip has no firmware to talk to
+            try:
+                link.restore()
+            except Exception as e:
+                log.warning(f"Reconnecting to {port} after the erase failed: {e}")
+        net.guard.usb.release()
 
 
 def recommend(port=""):
@@ -291,6 +362,7 @@ API = {
     # USB
     "flash": flash,
     "flash_cancel": net.usb.cancel_request,
+    "erase": erase,
     "recommend": recommend,
     "send_can_address": send_can_address,
     "probe": probe,

@@ -3,7 +3,8 @@
 // device and erases exactly the NVS partition (offsets differ between boards:
 // ESP32 0x9000+0x6000, XIAO ESP32-S3 0x9000+0x4000, Waveshare 0x9000+0x5000).
 
-import { isConnected, disconnect } from './serial.js';
+import { isConnected, disconnect, server, api } from './serial.js';
+import { watchUsb } from './microscope.js';
 
 const PT_OFFSET = 0x8000;
 const ESP_ERASE_REGION = 0xd1;       // supported by the esptool stub loader
@@ -49,9 +50,30 @@ function progress(pct, text) {
   document.getElementById('eraseStatus').textContent = text;
 }
 
+// Server mode: esptool on the microscope (same two modes)
+async function eraseOnServer(mode, btn) {
+  const port = document.getElementById('erasePort').value;
+  if (!confirm(`${mode === 'nvs' ? 'Erase the settings of' : 'Erase the whole flash of'} the board on ${port}?`)) return;
+  btn.disabled = true;
+  document.getElementById('eraseProgress').classList.remove('hidden');
+  watchUsb((st, done) => {
+    if (st.progress >= 0) progress(st.progress, st.message);
+    if (st.message) out(st.message, done ? (st.status === 'success' ? 'success' : 'error') : 'info');
+    if (st.details && done && st.status !== 'success') out(st.details, 'error');
+    if (done) btn.disabled = false;
+  });
+  const res = await api('erase', { port, mode });
+  if (res.status !== 'started') {
+    watchUsb(null);
+    out(res.message ?? res.status, 'error');
+    btn.disabled = false;
+  }
+}
+
 export async function eraseFlash() {
   const mode = document.querySelector('input[name="eraseType"]:checked').value;
   const btn = document.getElementById('eraseFlashBtn');
+  if (server.use) return eraseOnServer(mode, btn);
   let transport = null;
   btn.disabled = true;
   document.getElementById('eraseProgress').classList.remove('hidden');

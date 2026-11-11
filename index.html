@@ -62,7 +62,7 @@
         <li class="nav-item"><button class="nav-link" id="test-tab" data-bs-toggle="tab" data-bs-target="#test-pane" type="button"><i class="bi bi-sliders"></i> Test</button></li>
         <li class="nav-item"><button class="nav-link" id="scan-tab" data-bs-toggle="tab" data-bs-target="#scan-pane" type="button"><i class="bi bi-grid-3x3-gap"></i> Scan</button></li>
         <li class="nav-item"><button class="nav-link" id="configure-tab" data-bs-toggle="tab" data-bs-target="#configure-pane" type="button"><i class="bi bi-diagram-3"></i> Configure CAN</button></li>
-        <li class="nav-item webserial-only"><button class="nav-link" id="erase-tab" data-bs-toggle="tab" data-bs-target="#erase-pane" type="button"><i class="bi bi-eraser"></i> Erase</button></li>
+        <li class="nav-item"><button class="nav-link" id="erase-tab" data-bs-toggle="tab" data-bs-target="#erase-pane" type="button"><i class="bi bi-eraser"></i> Erase</button></li>
         <li class="nav-item"><button class="nav-link" id="help-tab" data-bs-toggle="tab" data-bs-target="#help-pane" type="button"><i class="bi bi-question-circle"></i> Help</button></li>
       </ul>
 
@@ -563,6 +563,10 @@
                   <div class="form-check mb-3">
                     <input class="form-check-input" type="radio" name="eraseType" id="eraseAll" value="all" />
                     <label class="form-check-label" for="eraseAll"><strong>Everything</strong> – blank chip. Flash a firmware afterwards.</label>
+                  </div>
+                  <div class="server-only mb-3">
+                    <label for="erasePort" class="form-label small text-muted mb-0">Serial port on the microscope</label>
+                    <select id="erasePort" class="form-select form-select-sm" style="max-width: 360px"></select>
                   </div>
                   <button id="eraseFlashBtn" class="btn btn-danger"><i class="bi bi-eraser"></i> Erase</button>
                   <div id="eraseProgress" class="mt-3 hidden">
