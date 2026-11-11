@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140" viewBox="0 0 140 140">
+  <rect width="140" height="140" fill="#f8f9fa"/>
+  <rect x="30" y="30" width="80" height="80" rx="8" fill="#dee2e6"/>
+  <circle cx="50" cy="50" r="5" fill="#6c757d"/>
+  <circle cx="90" cy="50" r="5" fill="#6c757d"/>
+  <circle cx="50" cy="90" r="5" fill="#6c757d"/>
+  <circle cx="90" cy="90" r="5" fill="#6c757d"/>
+  <rect x="55" y="55" width="30" height="20" rx="2" fill="#6c757d"/>
+  <text x="70" y="125" text-anchor="middle" fill="#6c757d" font-family="sans-serif" font-size="10">ESP32 Board</text>
+</svg>

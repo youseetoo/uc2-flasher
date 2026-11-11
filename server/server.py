@@ -1,12 +1,13 @@
-"""UC2 firmware flasher: ImSwitch's firmware tools without ImSwitch.
+"""UC2 flasher server: the web flasher's UI, with the board on this machine.
 
-Serves index.html and a small JSON API on top of imswitch/imcontrol/model/canbus
-(the same code ImSwitch's UC2ConfigController uses): firmware lookup on the
-firmware-image-server pallet or a GitHub release, the verified update of all
-boards, CAN streaming OTA per node, esptool flashing over USB, CAN ids.
+Serves the flasher page (index.html, one directory up or WEB_DIR) and a JSON
+API on top of ImSwitch's imswitch/imcontrol/model/canbus (the code behind
+UC2ConfigController): firmware lookup on the firmware-image-server pallet or a
+GitHub release, the verified update of all boards, CAN streaming OTA per node,
+esptool flashing over USB, and a serial bridge (rx / serial_send) so the page's
+Test, Scan and Configure tabs reach a board plugged into this machine.
 
-    python server.py            # http://localhost:8004
-    PORT=8004 FIRMWARE_URL=http://host.docker.internal/firmware python server.py
+    CANBUS_DIR=~/ImSwitch/imswitch/imcontrol/model/canbus python server/server.py
 
 API: GET or POST /api/<name>; arguments as query parameters or a JSON body.
 Long jobs (flash, ota, update) start in the background; poll /api/status.
@@ -29,10 +30,14 @@ import requests
 import uc2rest
 
 HERE = Path(__file__).resolve().parent
+WEB_DIR = Path(os.environ.get("WEB_DIR", HERE.parent))
 try:
     import canbus  # copied next to this file in the Docker image
-except ImportError:  # running from the ImSwitch repo: load the package by path
-    _pkg = HERE.parents[1] / "imswitch" / "imcontrol" / "model" / "canbus"
+except ImportError:  # outside Docker: an ImSwitch checkout's canbus package
+    _pkg = Path(os.environ.get("CANBUS_DIR", "canbus")).expanduser()
+    if not (_pkg / "__init__.py").exists():
+        sys.exit(f"canbus package not found at {_pkg}: set CANBUS_DIR to "
+                 "<ImSwitch>/imswitch/imcontrol/model/canbus")
     _spec = importlib.util.spec_from_file_location("canbus", _pkg / "__init__.py",
                                                    submodule_search_locations=[str(_pkg)])
     canbus = importlib.util.module_from_spec(_spec)
@@ -60,6 +65,15 @@ _ring.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%
 logging.getLogger().addHandler(_ring)
 log = logging.getLogger("uc2-flasher")
 
+# Raw lines from the board, for the page's serial console (seq, text)
+RX = collections.deque(maxlen=2000)
+_rx_seq = [0]
+
+
+def _on_rx(raw: bytes):
+    _rx_seq[0] += 1
+    RX.append((_rx_seq[0], raw.decode("utf-8", "replace").rstrip("\r\n")))
+
 
 class Link:
     """Our own serial connection to the USB board (the CAN master), as CanNetwork
@@ -73,6 +87,7 @@ class Link:
         self.disconnect()
         kwargs = {"baudrate": int(baud)} if baud else {}
         self.esp = uc2rest.UC2Client(serialport=port, logger=log, **kwargs)
+        self.esp.serial.setReadCallback(_on_rx)
         self.port, self.baud = port, baud
         return bool(self.esp.serial.is_connected)
 
@@ -151,6 +166,7 @@ def connect(port, baud=None, force=False):
     reasons = [] if force else imswitch_blockers()
     if reasons:
         return {"status": "refused", "reasons": reasons}
+    RX.clear()
     try:
         ok = link.connect(port, baud)
     except Exception as e:
@@ -218,6 +234,23 @@ def probe(port):
     return _not_own_port(port) or net.usb.probe_state(port)
 
 
+def serial_send(line):
+    """One JSON line to the board, unchanged; the replies arrive through rx."""
+    if link.esp is None:
+        return {"status": "error", "message": "not connected"}
+    if net.guard.busy_reasons():
+        return {"status": "busy", "message": net.guard.busy_reasons()[0]}
+    serial = link.esp.serial
+    serial._write(serial.serialdevice, line.strip() + "\n")  # what uc2rest sends, no qid added
+    return {"status": "success"}
+
+
+def rx(since=0):
+    since = int(since)
+    return {"connected": link.esp is not None, "port": link.current_port(),
+            "lines": [{"seq": s, "line": line} for s, line in list(RX) if s > since]}
+
+
 def status(since=0):
     since = int(since)
     return {"link": {"port": link.current_port(), "connected": link.esp is not None},
@@ -231,10 +264,12 @@ API = {
     "disconnect": disconnect,
     "info": link.info,
     "status": status,
+    "rx": rx,
+    "serial_send": serial_send,
     "imswitch": lambda: {"reasons": imswitch_blockers()},
     # firmware source
     "source": net.server.source,
-    "set_server": lambda url: net.server.set_url(url),
+    "set_server": lambda url=None: net.server.set_url(url or FIRMWARE_URL),
     "set_release": lambda release="latest", repo=None: net.server.set_release(release, repo),
     "releases": lambda repo=None: net.server.releases(repo),
     "files": net.server.files,
@@ -272,7 +307,7 @@ def _query_value(text):
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(HERE / "static"), **kwargs)
+        super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
     def log_message(self, fmt, *args):  # the UI polls /api/status every second
         pass
@@ -280,7 +315,14 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/api/"):
             return self._api()
+        if self.path.split("?")[0].endswith((".html", "/")):  # page updates show at once
+            self._no_cache = True
         return super().do_GET()
+
+    def end_headers(self):
+        if getattr(self, "_no_cache", False):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
 
     def do_POST(self):
         return self._api() if self.path.startswith("/api/") else self.send_error(404)

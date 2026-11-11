@@ -1,41 +1,67 @@
-# UC2 firmware flasher (standalone)
+# UC2 flasher
 
-ImSwitch's firmware tools without ImSwitch: a small web page + JSON API in one Docker
-container. It runs the same code as ImSwitch's `UC2ConfigController`
-(`imswitch/imcontrol/model/canbus`, copied into the image at build time):
+Flash, test and configure UC2 ESP32 boards (CAN master HAT+, CAN satellites, standalone boards).
+One page, two ways to reach the board:
 
-- firmware lookup on the firmware pallet (`firmware-image-server`, `http://<pi>/firmware`) or a
-  GitHub release of `youseetoo/uc2-esp32`, with sha256 checks against `version.json`
-- check all boards (USB master + CAN bus scan) and update the outdated ones: CAN nodes first, the
-  master last, each verified by the version it reports after the reboot
-- CAN streaming OTA of one node, with its own or a chosen image
-- esptool flashing over USB (the HAT, or any other port such as a XIAO), "which image fits?"
-- CAN address of a freshly flashed board, node-id reassignment by MAC
+| Served by | Board on | How |
+|---|---|---|
+| GitHub Pages / any static host | this computer | WebSerial (Chrome/Edge): esp-web-tools flashes, esptool-js erases |
+| `server/server.py` (Docker, on the microscope) | the microscope's USB | the server holds the port; esptool flashes, uc2rest bridges the serial console |
+
+The page detects the server (`api/rx`) and switches to server mode by itself. Server mode adds:
+
+- **Install** in the Flash tab writes `esp32_<env>[_merged].bin` with esptool on the microscope, from
+  the firmware pallet (`firmware-image-server`, default) or a GitHub release.
+- **Microscope** tab: firmware source, check every board (USB master + CAN bus scan) against it,
+  update the outdated ones (CAN nodes first, master last, each verified by the version it reports),
+  CAN streaming OTA of one node.
+- The **Test**, **Scan** and **Configure CAN** tabs work unchanged: their JSON lines go through
+  `api/serial_send`, the board's output comes back through `api/rx`.
+- Erase is hidden (it needs WebSerial); Install has "erase the chip first".
+
+The firmware logic is ImSwitch's `imswitch/imcontrol/model/canbus` (the code behind
+`UC2ConfigController`), pulled from GitHub at build time, not copied.
 
 ## Run
 
-From the ImSwitch repo root:
-
 ```bash
-docker compose -f docker/uc2-flasher/compose.yml up --build
+docker compose up --build        # http://localhost:8004
 ```
 
-Open `http://<host>:8004`. Without Docker: `python docker/uc2-flasher/server.py` (needs
-`pip install -r docker/uc2-flasher/requirements.txt`).
+Without Docker (from an ImSwitch checkout):
+
+```bash
+pip install -r server/requirements.txt
+CANBUS_DIR=<ImSwitch>/imswitch/imcontrol/model/canbus python server/server.py
+```
 
 | Env | Default | |
 |---|---|---|
 | `FIRMWARE_URL` | `http://host.docker.internal/firmware` | firmware pallet behind Caddy |
-| `FIRMWARE_RELEASE` | – | `latest` or a tag: use a GitHub release instead |
-| `IMSWITCH_URL` | `http://host.docker.internal:8001` | when it answers, connect/update are refused |
+| `FIRMWARE_RELEASE` | – | `latest` or a tag: GitHub release instead |
+| `IMSWITCH_URL` | `http://host.docker.internal:8001` | when `/imswitch/api/version` answers, connect/update are refused |
 | `PORT` | `8004` | |
+| `WEB_DIR` | repo root | the page to serve |
+| `CANBUS_DIR` | – | canbus package outside Docker |
 
 **Stop ImSwitch first.** A serial port has one owner; ImSwitch holds the HAT's port while it runs.
 
+## Container image
+
+`.github/workflows/docker.yml` runs the JS tests and builds `ghcr.io/youseetoo/uc2-flasher`
+(linux/amd64 + arm64) on every push to `main` and on `v*` tags. `IMSWITCH_REF` (build arg,
+workflow input) picks the ImSwitch branch the canbus package comes from. The build vendors
+Bootstrap into the image (`server/vendor_assets.py`), so the page works on a microscope without
+internet; esp-web-tools stays on the CDN because only WebSerial mode uses it.
+
 ## API
 
-`GET` or `POST /api/<name>`, arguments as query parameters or JSON body. Flash, OTA and update start
-in the background; `GET /api/status?since=<log seq>` returns their progress and new log lines.
-Names: `ports connect disconnect info status source set_server set_release releases files check update
-update_cancel scan ota ota_many ota_cancel reassign restart flash flash_cancel recommend
-send_can_address probe` (see `API` in `server.py`).
+`GET` or `POST /api/<name>`, arguments as query parameters or JSON body. Flash, OTA and update
+start in the background; `GET /api/status?since=<log seq>` returns their progress and new log
+lines. See `API` in `server/server.py`.
+
+## Tests
+
+```bash
+node --test tests/flasher.test.mjs
+```

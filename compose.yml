@@ -1,16 +1,15 @@
-# docker compose -f docker/uc2-flasher/compose.yml up --build   (from the repo root)
+# docker compose up --build    → http://localhost:8004
 services:
   flasher:
-    build:
-      context: ../..
-      dockerfile: docker/uc2-flasher/Dockerfile
+    build: .
+    image: ghcr.io/youseetoo/uc2-flasher:main
     ports:
       - "8004:8004"
     volumes:
       - /dev:/dev              # boards re-enumerate while flashing; a fixed --device would go stale
       - /run/udev:/run/udev:ro # port descriptions / VID:PID for chip detection
     device_cgroup_rules:
-      - 'a 188:* rwm' # USB-UART, e.g. /dev/ttyUSB0 (CAN HAT)
+      - 'a 188:* rwm' # USB-UART, e.g. /dev/ttyUSB0 (HAT)
       - 'a 166:* rwm' # native USB, e.g. /dev/ttyACM0 (XIAO)
     group_add:
       - dialout

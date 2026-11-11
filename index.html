@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>UC2 ESP32 Flasher & Tester</title>
+    <meta name="description" content="Flash, test and configure UC2 ESP32 boards (standalone, CANopen master and satellites) in the browser." />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet" />
+    <link href="css/flasher.css" rel="stylesheet" />
+
+    <!-- ESP Web Tools d(flashing) -->
+    <script type="module" src="https://unpkg.com/esp-web-tools@10.0.1/dist/web/install-button.js?module"></script>
+    <!-- esptool-js (erase) -->
+    <script type="module">
+      import * as esptoolJS from 'https://unpkg.com/esptool-js@0.5.0/bundle.js';
+      window.Transport = esptoolJS.Transport;
+      window.ESPLoader = esptoolJS.ESPLoader;
+      window.dispatchEvent(new CustomEvent('esptool-ready'));
+    </script>
+    <script>
+      window.waitForESPTool = (ms = 5000) => new Promise((resolve, reject) => {
+        if (window.ESPLoader) return resolve();
+        const t = setTimeout(() => reject(new Error('timeout')), ms);
+        window.addEventListener('esptool-ready', () => { clearTimeout(t); resolve(); }, { once: true });
+      });
+    </script>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+      <div class="container">
+        <a class="navbar-brand d-flex align-items-center" href="./">
+          <img src="https://docs.openuc2.com/img/Artboard4@4x.png" width="36" alt="" class="me-2" />
+          openUC2 Flasher &amp; Tester
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-label="Toggle navigation">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item"><a class="nav-link" href="https://docs.openuc2.com/dev/sw/interface/" target="_blank"><i class="bi bi-book"></i> Interface docs</a></li>
+            <li class="nav-item"><a class="nav-link" href="https://github.com/youseetoo/uc2-esp32" target="_blank"><i class="bi bi-github"></i> Firmware</a></li>
+            <li class="nav-item"><a class="nav-link" href="https://openuc2.discourse.group" target="_blank"><i class="bi bi-chat-dots"></i> Forum</a></li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container my-3">
+      <div id="browserWarning" class="alert alert-warning hidden">
+        <i class="bi bi-exclamation-triangle"></i> This browser has no WebSerial. Use Chrome, Edge or Opera on a desktop.
+      </div>
+      <div id="imswitchWarning" class="alert alert-danger hidden"></div>
+      <div id="postFlashBanner" class="alert alert-success alert-dismissible hidden">
+        <i class="bi bi-check-circle-fill"></i> <strong>Flashed.</strong> Click <em>Connect</em> to test the board or set its CAN node ID.
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+
+      <ul class="nav nav-tabs" id="mainTabs" role="tablist">
+        <li class="nav-item"><button class="nav-link active" id="flash-tab" data-bs-toggle="tab" data-bs-target="#flash-pane" type="button"><i class="bi bi-lightning-charge"></i> Flash</button></li>
+        <li class="nav-item server-only"><button class="nav-link" id="microscope-tab" data-bs-toggle="tab" data-bs-target="#microscope-pane" type="button"><i class="bi bi-hdd-network"></i> Microscope</button></li>
+        <li class="nav-item"><button class="nav-link" id="test-tab" data-bs-toggle="tab" data-bs-target="#test-pane" type="button"><i class="bi bi-sliders"></i> Test</button></li>
+        <li class="nav-item"><button class="nav-link" id="scan-tab" data-bs-toggle="tab" data-bs-target="#scan-pane" type="button"><i class="bi bi-grid-3x3-gap"></i> Scan</button></li>
+        <li class="nav-item"><button class="nav-link" id="configure-tab" data-bs-toggle="tab" data-bs-target="#configure-pane" type="button"><i class="bi bi-diagram-3"></i> Configure CAN</button></li>
+        <li class="nav-item webserial-only"><button class="nav-link" id="erase-tab" data-bs-toggle="tab" data-bs-target="#erase-pane" type="button"><i class="bi bi-eraser"></i> Erase</button></li>
+        <li class="nav-item"><button class="nav-link" id="help-tab" data-bs-toggle="tab" data-bs-target="#help-pane" type="button"><i class="bi bi-question-circle"></i> Help</button></li>
+      </ul>
+
+      <div class="tab-content">
+        <!-- ═══════════════ FLASH ═══════════════ -->
+        <div class="tab-pane fade show active" id="flash-pane" role="tabpanel">
+          <div class="row g-4">
+            <div class="col-lg-8">
+              <div class="card mb-3">
+                <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
+                  <h5 class="mb-0"><i class="bi bi-motherboard"></i> 1. Board</h5>
+                  <div class="d-flex gap-2">
+                    <select id="boardCategory" class="form-select form-select-sm" aria-label="Category"><option value="all">All boards</option></select>
+                    <input type="search" id="boardSearch" class="form-control form-control-sm" placeholder="Search…" aria-label="Search boards" />
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="row row-cols-2 row-cols-md-3 row-cols-xl-4 g-2" id="boardGrid"></div>
+                </div>
+              </div>
+              <div class="card mb-3 hidden" id="boardInfoCard"><div class="card-body" id="boardInfo"></div></div>
+              <div class="card">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-tag"></i> 2. Firmware version</h5></div>
+                <div class="card-body">
+                  <div class="row g-3">
+                    <div class="col-md-6">
+                      <label for="releaseSelect" class="form-label">Release</label>
+                      <select id="releaseSelect" class="form-select">
+                        <option value="auto">Newest release with this board (incl. pre-releases)</option>
+                        <option value="stable">Newest stable release</option>
+                      </select>
+                      <small id="loadingReleases" class="text-muted"><span class="spinner-border spinner-border-sm"></span> loading releases…</small>
+                      <div id="releaseError" class="alert alert-warning py-1 mt-2 small hidden"></div>
+                    </div>
+                    <div class="col-md-6">
+                      <label for="imswitchSelect" class="form-label">…or match an ImSwitch OS release</label>
+                      <select id="imswitchSelect" class="form-select"><option value="">–</option></select>
+                      <small id="imswitchNote" class="text-muted"></small>
+                    </div>
+                  </div>
+                  <p class="small text-muted mt-2 mb-0">Releases come from <a href="https://github.com/youseetoo/uc2-esp32/releases" target="_blank">youseetoo/uc2-esp32</a>. All CANopen firmware is currently published as pre-release.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-lg-4">
+              <div class="card sticky-top" style="top: 1rem">
+                <div class="card-header bg-primary text-white"><h5 class="mb-0"><i class="bi bi-lightning-charge"></i> 3. Install</h5></div>
+                <div class="card-body">
+                  <div class="small text-muted">Board</div>
+                  <div id="selectedBoardName" class="fw-bold">none selected</div>
+                  <div class="small text-muted mb-2" id="selectedBoardChip"></div>
+                  <div class="small text-muted">Firmware</div>
+                  <div id="resolvedRelease" class="mb-3">–</div>
+                  <div class="server-only">
+                    <label for="flashPort" class="form-label small text-muted mb-0">Serial port on the microscope</label>
+                    <select id="flashPort" class="form-select form-select-sm mb-2"></select>
+                    <div class="form-check small mb-2">
+                      <input class="form-check-input" type="checkbox" id="flashErase" />
+                      <label class="form-check-label" for="flashErase">Erase the chip first</label>
+                    </div>
+                    <button id="serverFlashBtn" class="btn btn-primary btn-lg w-100" disabled><i class="bi bi-lightning-charge"></i> Install firmware</button>
+                    <div class="progress mt-2" style="height: 6px"><div class="progress-bar" id="serverFlashBar" style="width: 0%"></div></div>
+                    <div class="small mt-1 text-break" id="serverFlashMsg"></div>
+                  </div>
+                  <esp-web-install-button id="installButton" class="webserial-only">
+                    <button slot="activate" class="btn btn-primary btn-lg w-100" disabled><i class="bi bi-lightning-charge"></i> Install firmware</button>
+                    <span slot="unsupported"><div class="alert alert-danger small">No WebSerial – use Chrome, Edge or Opera.</div></span>
+                    <span slot="not-allowed"><div class="alert alert-warning small">Serial access not allowed (needs https).</div></span>
+                  </esp-web-install-button>
+                  <div id="firmwareWarning" class="alert alert-warning py-2 mt-2 small hidden">
+                    <i class="bi bi-exclamation-triangle"></i> This board is not in the selected release. Pick another release or "newest release with this board".
+                  </div>
+                  <div class="form-check mt-3">
+                    <input class="form-check-input" type="checkbox" id="postFlashTest" checked />
+                    <label class="form-check-label small" for="postFlashTest">Open Test / Configure after flashing</label>
+                  </div>
+                  <ul class="small text-muted mt-3 ps-3 mb-2">
+                    <li>The image is written from address 0 and <strong>resets saved settings</strong> (node ID, role, positions).</li>
+                    <li>Close other programs using the port (ImSwitch, serial monitors) first.</li>
+                    <li>Flashing fails? See <a href="#" data-goto="help">Help</a>, or <a href="#" data-goto="erase">erase</a> and retry.</li>
+                  </ul>
+                  <div class="input-group input-group-sm">
+                    <input type="text" class="form-control" id="directLink" readonly aria-label="Direct link" />
+                    <button class="btn btn-outline-secondary" type="button" id="copyLinkBtn" title="Copy link"><i class="bi bi-clipboard"></i></button>
+                  </div>
+                  <a id="manifestLink" href="#" target="_blank" class="small">manifest</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════ MICROSCOPE (served by server/server.py only) ═══════════════ -->
+        <div class="tab-pane fade" id="microscope-pane" role="tabpanel">
+          <div class="row g-4">
+            <div class="col-lg-7">
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-box-seam"></i> Firmware source</h5></div>
+                <div class="card-body">
+                  <p class="mb-2">Images come from <strong id="mSource">–</strong></p>
+                  <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <button class="btn btn-sm btn-outline-primary" id="mUsePallet">Firmware pallet on the microscope</button>
+                    <span class="text-muted small">or</span>
+                    <select id="mRelease" class="form-select form-select-sm" style="max-width: 260px" aria-label="GitHub release"><option value="latest">latest GitHub release</option></select>
+                    <button class="btn btn-sm btn-outline-primary" id="mUseRelease">Use release</button>
+                  </div>
+                  <div class="small mt-2" id="mSourceMsg"></div>
+                  <details class="mt-2"><summary class="small">Images (<span id="mFileCount">–</span>)</summary>
+                    <div class="table-responsive"><table class="table table-sm small mb-0"><tbody id="mFiles"></tbody></table></div>
+                  </details>
+                </div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-arrow-repeat"></i> All boards — check and update</h5></div>
+                <div class="card-body">
+                  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                    <button class="btn btn-sm btn-primary" id="mCheck" data-needs-conn>Check boards</button>
+                    <div class="form-check small"><input class="form-check-input" type="checkbox" id="mProbeRange" /><label class="form-check-label" for="mProbeRange">probe ids 1–127 (unrouted boards)</label></div>
+                  </div>
+                  <div class="small mb-2" id="mCheckMsg">Connect to the CAN master (HAT) first.</div>
+                  <div class="table-responsive"><table class="table table-sm small">
+                    <thead><tr><th></th><th>Link</th><th>Node</th><th>Type</th><th>Installed</th><th>Available</th><th>Status</th></tr></thead>
+                    <tbody id="mBoards"></tbody>
+                  </table></div>
+                  <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <button class="btn btn-sm btn-primary" id="mUpdate">Update selected</button>
+                    <button class="btn btn-sm btn-outline-secondary" id="mUpdateCancel">Cancel after current board</button>
+                  </div>
+                  <div class="small mt-2" id="mUpdateMsg"></div>
+                  <div class="table-responsive"><table class="table table-sm small mb-0"><tbody id="mSteps"></tbody></table></div>
+                  <p class="small text-muted mt-2 mb-0">CAN nodes first, the USB master last. A board counts as updated only when it reports the new version. Updated motors must be homed again.</p>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-diagram-3"></i> One CAN node</h5></div>
+                <div class="card-body">
+                  <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <label for="mOtaId" class="small">Node</label>
+                    <input type="number" id="mOtaId" class="form-control form-control-sm" style="max-width: 90px" min="1" max="127" />
+                    <select id="mOtaFile" class="form-select form-select-sm" style="max-width: 360px" aria-label="Image"><option value="">its own image</option></select>
+                    <button class="btn btn-sm btn-primary" id="mOta" data-needs-conn>Flash over CAN</button>
+                    <button class="btn btn-sm btn-outline-secondary" id="mOtaCancel">Cancel</button>
+                  </div>
+                  <div class="progress mt-2" style="height: 6px"><div class="progress-bar" id="mOtaBar" style="width: 0%"></div></div>
+                  <div class="small mt-1" id="mOtaMsg"></div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-5">
+              <div class="console-slot mb-3"></div>
+              <div class="card">
+                <div class="card-header"><h6 class="mb-0">Microscope log</h6></div>
+                <div class="card-body p-0"><div class="console-output" id="serverLog" style="max-height: 300px"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════ TEST ═══════════════ -->
+        <div class="tab-pane fade" id="test-pane" role="tabpanel">
+          <div class="row g-4">
+            <div class="col-lg-7">
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-info-circle"></i> Board</h5></div>
+                <div class="card-body d-flex flex-wrap gap-2">
+                  <button class="btn btn-sm btn-outline-primary" id="btnState" data-needs-conn>State / version</button>
+                  <button class="btn btn-sm btn-outline-primary" id="btnModules" data-needs-conn>Modules</button>
+                  <button class="btn btn-sm btn-outline-primary" id="btnMotorGet" data-needs-conn>Positions</button>
+                  <button class="btn btn-sm btn-outline-success" id="btnEnable" data-needs-conn>Drivers on</button>
+                  <button class="btn btn-sm btn-outline-secondary" id="btnDisable" data-needs-conn>Drivers off</button>
+                  <button class="btn btn-sm btn-outline-secondary" id="btnAutoEnable" data-needs-conn>Auto-enable</button>
+                  <button class="btn btn-sm btn-outline-success" id="btnPowerOn" data-needs-conn title="HAT+ only">CAN bus power on</button>
+                  <button class="btn btn-sm btn-outline-danger" id="btnPowerOff" data-needs-conn title="HAT+ only">CAN bus power off</button>
+                  <button class="btn btn-sm btn-outline-primary" id="btnBtScan" data-needs-conn><i class="bi bi-bluetooth"></i> Pair PS4</button>
+                  <button class="btn btn-sm btn-outline-danger" id="btnRestart" data-needs-conn>Reboot</button>
+                </div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-arrows-move"></i> Motors</h5></div>
+                <div class="card-body">
+                  <div class="row g-2 mb-2 small">
+                    <div class="col-4"><label class="form-label mb-0" for="motorSpeed">Speed (steps/s)</label><input type="number" class="form-control form-control-sm" id="motorSpeed" value="20000" /></div>
+                    <div class="col-4"><label class="form-label mb-0" for="motorAccel">Acceleration (0 = keep)</label><input type="number" class="form-control form-control-sm" id="motorAccel" value="0" /></div>
+                    <div class="col-4"><label class="form-label mb-0" for="jogSpeed">Jog speed</label><input type="number" class="form-control form-control-sm" id="jogSpeed" value="5000" /></div>
+                  </div>
+                  <div class="form-check form-switch small mb-1">
+                    <input class="form-check-input" type="checkbox" id="showExtIds" />
+                    <label class="form-check-label" for="showExtIds">show CAN ids: motors 4–7, lasers 5–7 (e.g. standalone v4 satellite)</label>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm mb-2">
+                      <thead class="small"><tr><th>Axis</th><th>Steps</th><th>Move</th><th>Jog</th><th>Stop / home</th><th>Position</th></tr></thead>
+                      <tbody id="motorRows"></tbody>
+                    </table>
+                  </div>
+                  <details>
+                    <summary class="small">Homing parameters</summary>
+                    <div class="row g-2 mt-1 small">
+                      <div class="col-4"><label class="form-label mb-0" for="homeTimeout">Timeout (ms)</label><input type="number" class="form-control form-control-sm" id="homeTimeout" value="20000" /></div>
+                      <div class="col-4"><label class="form-label mb-0" for="homeSpeed">Speed</label><input type="number" class="form-control form-control-sm" id="homeSpeed" value="15000" /></div>
+                      <div class="col-4"><label class="form-label mb-0" for="homeDirection">Direction</label>
+                        <select class="form-select form-select-sm" id="homeDirection"><option value="-1">−1</option><option value="1">+1</option></select></div>
+                      <div class="col-4"><label class="form-label mb-0" for="homePolarity">Endstop</label>
+                        <select class="form-select form-select-sm" id="homePolarity"><option value="-1">keep configured</option><option value="0">normally open</option><option value="1">normally closed</option></select></div>
+                      <div class="col-4"><label class="form-label mb-0" for="homeRelease">Release steps (CAN axes)</label><input type="number" class="form-control form-control-sm" id="homeRelease" value="0" /></div>
+                      <div class="col-4 d-flex align-items-end"><div class="form-check"><input class="form-check-input" type="checkbox" id="homeHard" /><label class="form-check-label" for="homeHard">Hard homing</label></div></div>
+                    </div>
+                  </details>
+                </div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                  <h5 class="mb-0"><i class="bi bi-brightness-high"></i> Lasers (<code>/laser_act</code>)</h5>
+                  <div class="input-group input-group-sm" style="max-width: 190px">
+                    <span class="input-group-text">max</span>
+                    <select class="form-select" id="laserMax"><option value="1023">1023 (local)</option><option value="65535">65535 (CAN)</option></select>
+                  </div>
+                </div>
+                <div class="card-body" id="laserRows"></div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-grid-3x3"></i> LED array (<code>/ledarr_act</code>)</h5></div>
+                <div class="card-body">
+                  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                    <input type="color" class="form-control form-control-color" id="ledColor" value="#ffffff" title="Colour" />
+                    <button class="btn btn-sm btn-success" id="ledFill" data-needs-conn>Fill</button>
+                    <button class="btn btn-sm btn-outline-danger" id="ledOff" data-needs-conn>Off</button>
+                    <button class="btn btn-sm btn-outline-primary" data-led-half="left" data-needs-conn>Left</button>
+                    <button class="btn btn-sm btn-outline-primary" data-led-half="right" data-needs-conn>Right</button>
+                    <button class="btn btn-sm btn-outline-primary" data-led-half="top" data-needs-conn>Top</button>
+                    <button class="btn btn-sm btn-outline-primary" data-led-half="bottom" data-needs-conn>Bottom</button>
+                    <div class="input-group input-group-sm" style="max-width: 160px">
+                      <span class="input-group-text">ring r</span>
+                      <input type="number" class="form-control" id="ledRadius" value="3" min="1" max="8" />
+                      <button class="btn btn-outline-info" id="ledRing" data-needs-conn>Ring</button>
+                    </div>
+                  </div>
+                  <div class="small text-muted mb-1">Single pixels (8×8)</div>
+                  <div class="led-matrix-grid" id="ledMatrix"></div>
+                </div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-cpu"></i> TMC2209 (<code>/tmc_act</code>)</h5></div>
+                <div class="card-body">
+                  <div class="row g-2 small">
+                    <div class="col-3"><label class="form-label mb-0" for="tmcAxis">Driver</label>
+                      <select class="form-select form-select-sm" id="tmcAxis"><option value="0">0 / A</option><option value="1" selected>1 / X</option><option value="2">2 / Y</option><option value="3">3 / Z</option></select></div>
+                    <div class="col-3"><label class="form-label mb-0" for="tmcMsteps">Microsteps</label><input type="number" class="form-control form-control-sm" id="tmcMsteps" value="16" /></div>
+                    <div class="col-3"><label class="form-label mb-0" for="tmcRms">RMS current (mA)</label><input type="number" class="form-control form-control-sm" id="tmcRms" value="600" /></div>
+                    <div class="col-3"><label class="form-label mb-0" for="tmcSgthrs">SGTHRS</label><input type="number" class="form-control form-control-sm" id="tmcSgthrs" value="0" /></div>
+                    <div class="col-3"><label class="form-label mb-0" for="tmcSemin">SEMIN</label><input type="number" class="form-control form-control-sm" id="tmcSemin" value="0" /></div>
+                    <div class="col-3"><label class="form-label mb-0" for="tmcSemax">SEMAX</label><input type="number" class="form-control form-control-sm" id="tmcSemax" value="0" /></div>
+                    <div class="col-3"><label class="form-label mb-0" for="tmcBlank">Blank time</label><input type="number" class="form-control form-control-sm" id="tmcBlank" value="0" /></div>
+                    <div class="col-3"><label class="form-label mb-0" for="tmcToff">TOFF</label><input type="number" class="form-control form-control-sm" id="tmcToff" value="0" /></div>
+                  </div>
+                  <div class="small text-muted mt-1">0 = keep current value. Read-back works only for drivers on this board.</div>
+                  <button class="btn btn-sm btn-primary mt-2" id="tmcSet" data-needs-conn>Apply</button>
+                  <button class="btn btn-sm btn-outline-primary mt-2" id="tmcGet" data-needs-conn>Read</button>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-5"><div class="console-slot sticky-top" style="top: 1rem"></div></div>
+          </div>
+        </div>
+
+        <!-- ═══════════════ SCAN ═══════════════ -->
+        <div class="tab-pane fade" id="scan-pane" role="tabpanel">
+          <div class="row g-4">
+            <div class="col-lg-7">
+              <div class="card mb-3">
+                <div class="card-header">
+                  <fieldset class="d-flex flex-wrap gap-2 align-items-center">
+                    <h5 class="mb-0 me-auto"><i class="bi bi-camera-video"></i> Camera</h5>
+                    <select id="scanCamera" class="form-select form-select-sm w-auto" style="max-width: 240px" aria-label="Camera"></select>
+                    <select id="scanRes" class="form-select form-select-sm w-auto" aria-label="Resolution">
+                      <option>640x480</option><option selected>1280x720</option><option>1920x1080</option><option>2592x1944</option><option>3840x2160</option>
+                    </select>
+                    <button class="btn btn-sm btn-primary" id="scanCamBtn"><i class="bi bi-camera-video"></i> Start</button>
+                  </fieldset>
+                </div>
+                <div class="card-body p-2">
+                  <video id="scanVideo" class="w-100 d-block bg-dark" muted playsinline></video>
+                  <div class="small text-muted mt-1" id="scanCamInfo">Pick the USB camera and click Start. Camera names appear once the browser may use a camera.</div>
+                </div>
+              </div>
+              <div class="card mb-3">
+                <div class="card-header d-flex align-items-center">
+                  <h5 class="mb-0 me-auto"><i class="bi bi-grid-3x3-gap"></i> Mosaic</h5>
+                  <button class="btn btn-sm btn-outline-primary" id="scanSavePng"><i class="bi bi-download"></i> PNG</button>
+                </div>
+                <div class="card-body p-2">
+                  <canvas id="scanMosaic" class="w-100 d-block bg-dark" width="0" height="0" style="max-height: 70vh; object-fit: contain"></canvas>
+                  <div class="small text-muted mt-1">Tiles placed at their stage positions, no image registration. Changing the pixel size or orientation re-places the last scan, so you can tune them until the seams match.</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-5">
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-arrows-move"></i> Stage &amp; scan</h5></div>
+                <div class="card-body">
+                  <fieldset id="scanSettings">
+                    <div class="row g-2 small">
+                      <div class="col-3"><label class="form-label mb-0" for="scanUmX">µm/step X</label><input type="number" class="form-control form-control-sm" id="scanUmX" value="0.3125" step="any" /></div>
+                      <div class="col-3"><label class="form-label mb-0" for="scanUmY">µm/step Y</label><input type="number" class="form-control form-control-sm" id="scanUmY" value="0.3125" step="any" /></div>
+                      <div class="col-3"><label class="form-label mb-0" for="scanSpeed">Speed (steps/s)</label><input type="number" class="form-control form-control-sm" id="scanSpeed" value="15000" /></div>
+                      <div class="col-3"><label class="form-label mb-0" for="scanAccel">Accel. (0 = keep)</label><input type="number" class="form-control form-control-sm" id="scanAccel" value="0" /></div>
+                    </div>
+                    <div class="form-text mt-0">Stepper ids 1 (X) and 2 (Y). A negative µm/step inverts that axis.</div>
+
+                    <h6 class="mt-3 mb-1">Camera ↔ stage</h6>
+                    <div class="row g-2 small align-items-end">
+                      <div class="col-4"><label class="form-label mb-0" for="scanPx">Pixel size (µm/px)</label><input type="number" class="form-control form-control-sm" id="scanPx" value="1" step="any" /></div>
+                      <div class="col-8">
+                        <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="scanSwap" /><label class="form-check-label" for="scanSwap">swap X/Y</label></div>
+                        <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="scanFlipX" /><label class="form-check-label" for="scanFlipX">flip image x</label></div>
+                        <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="scanFlipY" /><label class="form-check-label" for="scanFlipY">flip image y</label></div>
+                      </div>
+                    </div>
+                    <div class="form-text mt-0">Pixel size in the sample plane. <em>Swap</em>: stage X moves the image up/down. <em>Flip</em>: tiles go to the other side along that image axis.</div>
+
+                    <h6 class="mt-3 mb-1">Jog</h6>
+                    <div class="d-flex flex-wrap gap-1 align-items-center small">
+                      <div class="input-group input-group-sm" style="max-width: 130px"><input type="number" class="form-control" id="scanJogStep" value="500" aria-label="Jog step" /><span class="input-group-text">µm</span></div>
+                      <button class="btn btn-sm btn-outline-success" data-needs-conn data-scan-jog="X-">X−</button>
+                      <button class="btn btn-sm btn-outline-success" data-needs-conn data-scan-jog="X+">X+</button>
+                      <button class="btn btn-sm btn-outline-success" data-needs-conn data-scan-jog="Y-">Y−</button>
+                      <button class="btn btn-sm btn-outline-success" data-needs-conn data-scan-jog="Y+">Y+</button>
+                      <span class="font-monospace ms-1" id="scanPos">X 0.0 µm · Y 0.0 µm</span>
+                    </div>
+
+                    <h6 class="mt-3 mb-1">Grid, centred on the current position</h6>
+                    <div class="row g-2 small">
+                      <div class="col-3"><label class="form-label mb-0" for="scanNx">Tiles X</label><input type="number" class="form-control form-control-sm" id="scanNx" value="3" min="1" max="100" /></div>
+                      <div class="col-3"><label class="form-label mb-0" for="scanNy">Tiles Y</label><input type="number" class="form-control form-control-sm" id="scanNy" value="3" min="1" max="100" /></div>
+                      <div class="col-3"><label class="form-label mb-0" for="scanOverlap">Overlap %</label><input type="number" class="form-control form-control-sm" id="scanOverlap" value="25" min="0" max="90" /></div>
+                      <div class="col-3"><label class="form-label mb-0" for="scanSettle" title="Wait after each move before the frame is taken: stage vibration and camera latency">Settle (ms)</label><input type="number" class="form-control form-control-sm" id="scanSettle" value="300" min="0" /></div>
+                    </div>
+                    <div class="small mt-1">
+                      <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="scanSnake" checked /><label class="form-check-label" for="scanSnake">snake</label></div>
+                      <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="scanReturn" checked /><label class="form-check-label" for="scanReturn">return to start</label></div>
+                    </div>
+                    <div class="small text-muted" id="scanInfo"></div>
+
+                    <div class="d-flex flex-wrap gap-2 align-items-center mt-3">
+                      <button class="btn btn-sm btn-outline-secondary" id="scanFolderBtn"><i class="bi bi-folder2-open"></i> Save tiles to…</button>
+                      <span class="small text-muted" id="scanFolder">tiles are not saved</span>
+                    </div>
+                    <div class="form-text mt-0">Per scan: <code>tiles/*.jpg</code>, <code>tiles.json</code>, <code>scan.json</code> (ImSwitch ShitScope layout), <code>mosaic.png</code> and <code>tiles/TileConfiguration.txt</code> for Fiji › Stitching › Grid/Collection (positions from file).</div>
+                  </fieldset>
+                  <div class="d-flex gap-2 align-items-center mt-3">
+                    <button class="btn btn-primary" id="scanStart" data-needs-conn><i class="bi bi-play-fill"></i> Start scan</button>
+                    <button class="btn btn-outline-danger" id="scanStop" disabled><i class="bi bi-stop-fill"></i> Stop after this tile</button>
+                  </div>
+                  <div class="progress mt-2" style="height: 6px"><div class="progress-bar" id="scanBar" style="width: 0%"></div></div>
+                  <div class="small mt-1" id="scanStatus"></div>
+                </div>
+              </div>
+              <div class="console-slot"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════ CONFIGURE CAN ═══════════════ -->
+        <div class="tab-pane fade" id="configure-pane" role="tabpanel">
+          <div class="row g-4">
+            <div class="col-lg-7">
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-usb-symbol"></i> Connected board</h5></div>
+                <div class="card-body">
+                  <button class="btn btn-sm btn-outline-primary" id="canRead" data-needs-conn>Read node ID &amp; role</button>
+                  <div class="small mt-2"><span id="ownInfo" class="font-monospace">–</span><br /><span id="ownPindef" class="text-muted"></span></div>
+                  <hr />
+                  <h6>Set this board's node ID</h6>
+                  <p class="small text-muted mb-2">For a satellite connected through <strong>its own USB</strong>. Saved in NVS, active immediately. Masters stay at 1.</p>
+                  <div class="d-flex flex-wrap gap-1 mb-2" id="nodePresets"></div>
+                  <div class="input-group input-group-sm" style="max-width: 260px">
+                    <span class="input-group-text">node</span>
+                    <input type="number" class="form-control" id="ownNodeId" min="1" max="127" placeholder="1–127" />
+                    <button class="btn btn-primary" id="setOwnNodeBtn" data-needs-conn>Set</button>
+                  </div>
+                  <hr />
+                  <h6>Role of this board</h6>
+                  <p class="small text-muted mb-2">Saved in NVS, active after the reboot. A standalone v4 becomes a CAN satellite (suggested node 14) that the HAT+ drives.</p>
+                  <div class="input-group input-group-sm" style="max-width: 440px">
+                    <select class="form-select" id="roleSelect" aria-label="Role">
+                      <option value="2">Satellite</option><option value="1">Master</option><option value="0">Standalone</option>
+                    </select>
+                    <span class="input-group-text">node</span>
+                    <input type="number" class="form-control" id="roleNode" value="14" min="1" max="127" />
+                    <button class="btn btn-warning" id="roleBtn" data-needs-conn>Save &amp; reboot</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                  <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Bus (through a master)</h5>
+                  <span class="small text-muted" id="scanCount"></span>
+                </div>
+                <div class="card-body">
+                  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                    <button class="btn btn-sm btn-primary" id="scanBtn" data-needs-conn><i class="bi bi-radar"></i> Scan</button>
+                    <div class="form-check"><input class="form-check-input" type="checkbox" id="probeRange" /><label class="form-check-label small" for="probeRange">probe all IDs (slow)</label></div>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm small" id="scanTable">
+                      <thead><tr><th>Node</th><th>Type</th><th>Status</th><th>Firmware</th><th>Image</th><th>MAC</th><th></th></tr></thead>
+                      <tbody></tbody>
+                    </table>
+                  </div>
+                  <h6 class="mt-3">Change a satellite's node ID</h6>
+                  <p class="small text-muted mb-2">Only one node may have the old ID while doing this.</p>
+                  <div class="input-group input-group-sm" style="max-width: 360px">
+                    <span class="input-group-text">from</span><input type="number" class="form-control" id="remoteTarget" value="11" min="1" max="127" />
+                    <span class="input-group-text">to</span><input type="number" class="form-control" id="remoteNew" value="12" min="1" max="127" />
+                    <button class="btn btn-primary" id="remoteIdBtn" data-needs-conn>Apply</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                  <h5 class="mb-0"><i class="bi bi-signpost-split"></i> Routing (on a master)</h5>
+                  <button class="btn btn-sm btn-outline-primary" id="routeBtn" data-needs-conn>Read table</button>
+                </div>
+                <div class="card-body">
+                  <p class="small text-muted mb-2">Where each device id goes: a <em>local</em> pin, a CAN node (<em>remote</em>, node + sub-axis), or <em>off</em>. A motor route also sets homing and TMC of that axis. <em>Saved</em> routes survive reboots.</p>
+                  <div class="table-responsive" style="max-height: 260px">
+                    <table class="table table-sm small" id="routeTable">
+                      <thead><tr><th>Type</th><th>Id</th><th>Where</th><th>Node</th><th>Sub</th><th></th></tr></thead>
+                      <tbody></tbody>
+                    </table>
+                  </div>
+                  <h6 class="mt-2">Set one route</h6>
+                  <div class="row g-2 small align-items-end">
+                    <div class="col-3"><label class="form-label mb-0" for="rtType">Type</label>
+                      <select class="form-select form-select-sm" id="rtType"><option>MOTOR</option><option>LASER</option><option>LED</option><option>GALVO</option><option>HOME</option><option>TMC</option></select></div>
+                    <div class="col-2"><label class="form-label mb-0" for="rtId">Id</label><input type="number" class="form-control form-control-sm" id="rtId" value="4" min="0" max="63" /></div>
+                    <div class="col-3"><label class="form-label mb-0" for="rtWhere">Where</label>
+                      <select class="form-select form-select-sm" id="rtWhere"><option>REMOTE</option><option>LOCAL</option><option>OFF</option></select></div>
+                    <div class="col-2"><label class="form-label mb-0" for="rtNode">Node</label><input type="number" class="form-control form-control-sm" id="rtNode" value="14" min="1" max="127" /></div>
+                    <div class="col-2"><label class="form-label mb-0" for="rtSub">Sub</label><input type="number" class="form-control form-control-sm" id="rtSub" value="0" min="0" max="3" /></div>
+                    <div class="col-6"><div class="form-check"><input class="form-check-input" type="checkbox" id="rtPersist" checked /><label class="form-check-label" for="rtPersist">save (survives reboot)</label></div></div>
+                    <div class="col-6 text-end"><button class="btn btn-sm btn-primary" id="rtSetBtn" data-needs-conn>Set route</button></div>
+                  </div>
+                  <h6 class="mt-3">Standalone v4 as satellite</h6>
+                  <p class="small text-muted mb-2">Saves routes for its four axes (A X Y Z) and its lasers 1–3. Motor satellites 10–13 keep stepperid 0–3.</p>
+                  <div class="input-group input-group-sm mb-2" style="max-width: 520px">
+                    <span class="input-group-text">node</span><input type="number" class="form-control" id="maNode" value="14" min="1" max="127" />
+                    <span class="input-group-text">motors from</span><input type="number" class="form-control" id="maMotorBase" value="4" min="0" max="60" />
+                    <span class="input-group-text">lasers from</span><input type="number" class="form-control" id="maLaserBase" value="5" min="0" max="61" />
+                    <button class="btn btn-primary" id="maApplyBtn" data-needs-conn>Apply</button>
+                  </div>
+                  <button class="btn btn-sm btn-outline-danger" id="rtResetBtn" data-needs-conn>Reset routes to build defaults</button>
+                </div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-braces"></i> Raw SDO</h5></div>
+                <div class="card-body">
+                  <div class="row g-2 small">
+                    <div class="col-2"><label class="form-label mb-0" for="sdoNode">Node</label><input type="number" class="form-control form-control-sm" id="sdoNode" value="11" /></div>
+                    <div class="col-3"><label class="form-label mb-0" for="sdoIndex">Index</label><input type="text" class="form-control form-control-sm" id="sdoIndex" value="0x2001" /></div>
+                    <div class="col-2"><label class="form-label mb-0" for="sdoSub">Sub</label><input type="number" class="form-control form-control-sm" id="sdoSub" value="2" /></div>
+                    <div class="col-2"><label class="form-label mb-0" for="sdoType">Type</label>
+                      <select class="form-select form-select-sm" id="sdoType"><option>u8</option><option>u16</option><option>u32</option><option selected>i32</option></select></div>
+                    <div class="col-3"><label class="form-label mb-0" for="sdoOp">Op</label>
+                      <select class="form-select form-select-sm" id="sdoOp"><option value="r">read</option><option value="w">write</option></select></div>
+                    <div class="col-4"><label class="form-label mb-0" for="sdoValue">Value (write)</label><input type="number" class="form-control form-control-sm" id="sdoValue" value="0" /></div>
+                    <div class="col-3 d-flex align-items-end"><button class="btn btn-sm btn-primary" id="sdoBtn" data-needs-conn>Send</button></div>
+                  </div>
+                  <div class="small text-muted mt-1">Objects: <a href="https://docs.openuc2.com/dev/sw/interface/reference/canopen-object-dictionary" target="_blank">CANopen object dictionary</a>. Expedited (≤ 4 bytes) only.</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-5"><div class="console-slot sticky-top" style="top: 1rem"></div></div>
+          </div>
+        </div>
+
+        <!-- ═══════════════ ERASE ═══════════════ -->
+        <div class="tab-pane fade" id="erase-pane" role="tabpanel">
+          <div class="row justify-content-center">
+            <div class="col-lg-8">
+              <div class="card">
+                <div class="card-header bg-danger text-white"><h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Erase flash</h5></div>
+                <div class="card-body">
+                  <div class="form-check">
+                    <input class="form-check-input" type="radio" name="eraseType" id="eraseNvs" value="nvs" checked />
+                    <label class="form-check-label" for="eraseNvs"><strong>Settings only</strong> – erase the NVS partition (node ID, role, saved positions). Firmware stays.</label>
+                  </div>
+                  <div class="form-check mb-3">
+                    <input class="form-check-input" type="radio" name="eraseType" id="eraseAll" value="all" />
+                    <label class="form-check-label" for="eraseAll"><strong>Everything</strong> – blank chip. Flash a firmware afterwards.</label>
+                  </div>
+                  <button id="eraseFlashBtn" class="btn btn-danger"><i class="bi bi-eraser"></i> Erase</button>
+                  <div id="eraseProgress" class="mt-3 hidden">
+                    <div class="progress mb-1"><div class="progress-bar progress-bar-striped progress-bar-animated bg-danger" id="eraseProgressBar" style="width: 0%"></div></div>
+                    <p class="small mb-0" id="eraseStatus"></p>
+                  </div>
+                  <div class="console-output mt-3" id="eraseConsole" style="max-height: 220px"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════ HELP ═══════════════ -->
+        <div class="tab-pane fade" id="help-pane" role="tabpanel">
+          <div class="row g-4">
+            <div class="col-lg-8">
+              <h5>Drivers</h5>
+              <p>ESP32 DevKit boards (standalone, HAT+ USB-C) use a <strong>CP2102</strong> or <strong>CH340</strong> USB-UART chip:
+                <a href="https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers" target="_blank">CP210x driver</a> ·
+                <a href="https://www.wch.cn/downloads/CH341SER_EXE.html" target="_blank">CH340 driver</a>.
+                XIAO ESP32-S3 boards use native USB and need no driver.</p>
+              <h5>Boot mode</h5>
+              <ul>
+                <li><strong>ESP32:</strong> hold BOOT, tap RESET (EN), release BOOT.</li>
+                <li><strong>XIAO ESP32-S3:</strong> hold BOOT while plugging in USB.</li>
+              </ul>
+              <h5>Common problems</h5>
+              <ul>
+                <li><strong>No port in the list:</strong> charge-only cable, missing driver, or the port is open in ImSwitch / another tab.</li>
+                <li><strong>Flashing stops halfway:</strong> enter boot mode manually, or erase everything and retry.</li>
+                <li><strong>Test tab shows only garbage:</strong> wrong baud rate – 921600 for the HAT+ master, 115200 for standalone boards.</li>
+                <li><strong>CAN satellite not found in a scan:</strong> check bus power, 120 Ω termination at both bus ends, and that no two boards share a node ID.</li>
+                <li><strong>Unplugged during flashing:</strong> reconnect and flash again.</li>
+              </ul>
+              <h5>Serial protocol</h5>
+              <p>One compact JSON object per line, e.g. <code>{"task":"/state_get","qid":1}</code>. Replies are framed by <code>++</code> / <code>--</code>; everything else is log output.
+                Reference: <a href="https://docs.openuc2.com/dev/sw/interface/reference/serial-commands" target="_blank">serial commands</a> ·
+                <a href="https://docs.openuc2.com/dev/sw/interface/reference/boards-and-node-ids" target="_blank">boards &amp; node IDs</a> ·
+                <a href="https://docs.openuc2.com/dev/sw/interface/how-to/update-firmware-over-can" target="_blank">update satellites over CAN</a> ·
+                <a href="https://docs.openuc2.com/dev/sw/interface/how-to/standalone-v4-as-satellite" target="_blank">standalone v4 as satellite</a>.</p>
+            </div>
+            <div class="col-lg-4">
+              <h5>Camera software</h5>
+              <ul>
+                <li><a href="https://openuc2.github.io/docs/ImSwitch/DahengCamera/" target="_blank">Daheng setup</a></li>
+                <li><a href="https://openuc2.github.io/docs/Toolboxes/DiscoveryInterferometer/SoftwareTutorial/#install-mvs-app-for-camera-utilization" target="_blank">HIK MVS setup</a></li>
+              </ul>
+              <h5>Source</h5>
+              <ul>
+                <li><a href="https://github.com/youseetoo/uc2-esp32" target="_blank">Firmware (PlatformIO)</a></li>
+                <li><a href="https://github.com/youseetoo/uc2-esp32-binaries" target="_blank">Published images</a></li>
+                <li><a href="https://github.com/openUC2/UC2-REST" target="_blank">Python client uc2rest</a></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Shared serial console: moved into the console slot of the active tab -->
+      <div id="consoleHolder" class="hidden"><div class="card" id="consoleCard">
+        <div class="card-header">
+          <div class="d-flex flex-wrap gap-2 align-items-center">
+            <select id="connMode" class="form-select form-select-sm server-available" style="max-width: 200px" aria-label="Where the board is">
+              <option value="server">Board on the microscope</option>
+              <option value="webserial">Board on this computer</option>
+            </select>
+            <select id="serverPort" class="form-select form-select-sm server-only" style="max-width: 220px" aria-label="Serial port on the microscope"></select>
+            <button class="btn btn-sm btn-primary" id="connectBtn" data-conn-btn><i class="bi bi-plug"></i> Connect</button>
+            <span class="badge bg-secondary" data-conn-status>Disconnected</span>
+            <select id="baudRate" class="form-select form-select-sm" style="max-width: 130px" aria-label="Baud rate">
+              <option value="115200">115200</option><option value="921600">921600</option><option value="500000">500000</option>><option value="9600">9600</option>
+            </select>
+            <div class="form-check ms-auto"><input class="form-check-input" type="checkbox" id="showLogs" checked /><label class="form-check-label small" for="showLogs">logs</label></div>
+            <button class="btn btn-sm btn-outline-secondary" id="clearConsoleBtn" title="Clear"><i class="bi bi-trash"></i></button>
+          </div>
+        </div>
+        <div class="card-body p-0"><div class="console-output" id="consoleOutput" style="min-height: 360px; max-height: 60vh"></div></div>
+        <div class="card-footer">
+          <div class="input-group input-group-sm">
+            <select class="form-select" id="commandExamples" style="max-width: 120px" aria-label="Examples"><option value="">examples</option></select>
+            <input type="text" class="form-control font-monospace" id="customCommand" placeholder='{"task":"/state_get"}' aria-label="JSON command" />
+            <button class="btn btn-primary" id="sendCommandBtn" data-needs-conn><i class="bi bi-send"></i></button>
+          </div>
+        </div>
+      </div></div>
+    </div>
+
+    <footer class="text-center text-muted small py-4">
+      © <a href="https://openuc2.com" target="_blank">openUC2</a> · built on
+      <a href="https://github.com/esphome/esp-web-tools" target="_blank">ESP Web Tools</a> and
+      <a href="https://github.com/espressif/esptool-js" target="_blank">esptool-js</a>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script type="module" src="js/flasher/app.js"></script>
+  </body>
+</html>

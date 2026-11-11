@@ -1,12 +1,22 @@
-# Build from the ImSwitch repo root (the canbus package is shared with ImSwitch):
-#   docker build -f docker/uc2-flasher/Dockerfile -t uc2-flasher .
+# syntax=docker/dockerfile:1
+# UC2 flasher: the web flasher page + server/server.py, for boards on this machine's USB.
+#   docker build -t uc2-flasher .
 FROM python:3.12-slim
 WORKDIR /app
-COPY docker/uc2-flasher/requirements.txt .
+COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY imswitch/imcontrol/model/canbus ./canbus
-COPY docker/uc2-flasher/server.py .
-COPY docker/uc2-flasher/static ./static
-ENV PORT=8004 PYTHONUNBUFFERED=1
+
+# The firmware logic is ImSwitch's canbus package (no ImSwitch imports), taken from GitHub
+ARG IMSWITCH_REF=master
+ADD --keep-git-dir=false https://github.com/openUC2/ImSwitch.git#${IMSWITCH_REF}:imswitch/imcontrol/model/canbus /app/canbus
+
+COPY index.html /app/web/
+COPY css /app/web/css
+COPY js /app/web/js
+COPY IMAGES /app/web/IMAGES
+COPY server/vendor_assets.py server/server.py /app/
+RUN python vendor_assets.py /app/web
+
+ENV PORT=8004 WEB_DIR=/app/web PYTHONUNBUFFERED=1
 EXPOSE 8004
 CMD ["python", "server.py"]
