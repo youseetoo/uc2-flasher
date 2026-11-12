@@ -7,7 +7,8 @@ COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # The firmware logic is ImSwitch's canbus package (no ImSwitch imports), taken from GitHub
-ARG IMSWITCH_REF=master
+# canbus with GitHub-release firmware support (not on master/edge yet); move to edge once merged
+ARG IMSWITCH_REF=a7a09b65f46de2d3459fe49474b0e887261f5df3
 ADD --keep-git-dir=false https://github.com/openUC2/ImSwitch.git#${IMSWITCH_REF}:imswitch/imcontrol/model/canbus /app/canbus
 
 COPY index.html /app/web/

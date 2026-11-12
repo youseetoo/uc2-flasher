@@ -9,7 +9,7 @@ on:
     inputs:
       imswitch_ref:
         description: ImSwitch branch/tag to take the canbus package from
-        default: master
+        default: ''
 
 jobs:
   test:
@@ -50,7 +50,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          build-args: IMSWITCH_REF=${{ inputs.imswitch_ref || 'master' }}
+          build-args: ${{ inputs.imswitch_ref && format('IMSWITCH_REF={0}', inputs.imswitch_ref) || '' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

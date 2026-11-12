@@ -49,7 +49,7 @@ CANBUS_DIR=<ImSwitch>/imswitch/imcontrol/model/canbus python server/server.py
 ## Container image
 
 `.github/workflows/docker.yml` runs the JS tests and builds `ghcr.io/youseetoo/uc2-flasher`
-(linux/amd64 + arm64) on every push to `main` and on `v*` tags. `IMSWITCH_REF` (build arg,
+(linux/amd64 + arm64) on every push to `main` and on `v*` tags. `IMSWITCH_REF` (build arg, pinned to an ImSwitch commit in the Dockerfile;
 workflow input) picks the ImSwitch branch the canbus package comes from. The build vendors
 Bootstrap into the image (`server/vendor_assets.py`), so the page works on a microscope without
 internet; esp-web-tools stays on the CDN because only WebSerial mode uses it.
