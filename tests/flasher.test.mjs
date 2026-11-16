@@ -5,6 +5,7 @@ import { createFrameParser } from '../js/flasher/serial.js';
 import { parsePartitionTable } from '../js/flasher/erase.js';
 import * as C from '../js/flasher/commands.js';
 import * as S from '../js/flasher/scan.js';
+import * as G from '../js/flasher/galvo.js';
 
 test('frame parser: NUL terminators, log lines, chunk boundaries', () => {
   const frames = [], logs = [];
@@ -76,4 +77,75 @@ test('scan plan: centred snake grid, swapped field of view, orientation', () => 
   assert.deepEqual(S.toImage(1, 2), [1, 2]);
   assert.deepEqual(S.toImage(1, 2, { swap: true, flipX: true }), [-2, 1]);
   assert.deepEqual(S.toImage(1, 2, { flipY: true }), [1, -2]);
+});
+
+test('galvo commands: bool bidirectional, qid on acts, range checks', () => {
+  const scan = C.galvoScan({ ...G.DEFAULTS, bidirectional: 1 });
+  assert.equal(scan.task, '/galvo_act');
+  assert.equal(scan.config.bidirectional, true);   // the board's local parser only accepts a JSON bool
+  assert.equal(scan.config.nx, 256);
+  assert.ok(Number.isInteger(scan.qid));
+  assert.equal(C.galvoStop().stop, true);
+  assert.deepEqual(C.galvoGoto(2048, 0).galvo, { x: 2048, y: 0 });
+  assert.throws(() => C.galvoGoto(4096, 0));
+  assert.throws(() => C.galvoGoto(1.5, 0));
+  const pts = C.galvoPoints([{ x: 1, y: 2, dwell_us: 3, laser_intensity: 9 }], 'HIGH');
+  assert.deepEqual(pts.points, [{ x: 1, y: 2, dwell_us: 3 }]);   // the board reads x, y, dwell_us only
+  assert.equal(pts.laser_trigger, 'HIGH');
+  assert.throws(() => C.galvoPoints([]));
+  assert.throws(() => C.galvoPoints(Array(257).fill({ x: 0, y: 0, dwell_us: 1 })));
+  assert.throws(() => C.galvoPoints([{ x: 0, y: 0, dwell_us: 1 }], 'MAYBE'));
+  assert.equal(C.galvoTrigger('LOW').laser_trigger, 'LOW');
+  assert.equal(C.galvoGet().task, '/galvo_get');
+  assert.ok(!C.toLine(scan).includes('\n'));
+});
+
+test('galvo line profile matches the firmware layout', () => {
+  const c = { ...G.DEFAULTS, nx: 4, x_min: 300, x_max: 600, overscan_samples: 2, pre_samples: 1, fly_samples: 0, line_settle_samples: 1, bidirectional: false };
+  const p = G.lineProfile(c);
+  // pre @ start_x | lead-in ramp | image | lead-out ramp | settle @ start_x   (slope 100/pixel)
+  assert.deepEqual(p.x, [100, 100, 200, 300, 400, 500, 600, 700, 800, 100]);
+  assert.deepEqual([p.imgStart, p.imgEnd, p.total], [3, 7, 10]);
+  assert.deepEqual(p.regions.filter((r) => r.to > r.from).map((r) => [r.name, r.from, r.to]),
+    [['pre', 0, 1], ['lead-in', 1, 3], ['image', 3, 7], ['lead-out', 7, 9], ['settle', 9, 10]]);
+  assert.deepEqual(G.mirrorLine(p), [800, 800, 700, 600, 500, 400, 300, 200, 100, 800]);
+  // bidirectional: no fly-back (even if set), settle holds at the far end
+  const b = G.lineProfile({ ...c, bidirectional: true, fly_samples: 50 });
+  assert.equal(b.total, 10);
+  assert.equal(b.x.at(-1), 800);
+  // unidirectional fly-back: cosine ease from end_x to start_x
+  const f = G.lineProfile({ ...c, fly_samples: 3, line_settle_samples: 0, pre_samples: 0 });
+  assert.deepEqual(f.x.slice(-3), [800, 450, 100]);
+  assert.equal(G.lineProfile({ ...c, nx: 5000 }), null);   // longer than the board allows
+});
+
+test('galvo validation mirrors the board', () => {
+  assert.deepEqual(G.validate(G.DEFAULTS), { errors: [], warnings: [] });
+  const bad = G.validate({ ...G.DEFAULTS, x_min: 3000, x_max: 3000, ny: 0 });
+  assert.equal(bad.errors.length, 2);
+  const long = G.validate({ ...G.DEFAULTS, nx: 4000, fly_samples: 200 });
+  assert.match(long.errors[0], /4\d{3} samples/);
+  assert.equal(G.validate({ ...G.DEFAULTS, nx: 4000, fly_samples: 200, bidirectional: true, pre_samples: 0, overscan_samples: 0, line_settle_samples: 0 }).errors.length, 0);   // no fly-back counted
+  assert.equal(G.lineSamples(G.DEFAULTS), 64 + 2 * 32 + 256 + 256 + 128);
+  assert.match(G.validate({ ...G.DEFAULTS, x_min: 0, x_max: 4095 }).warnings[0], /overscan/);   // ramp past the DAC range is clipped
+  assert.equal(G.validate({ ...G.DEFAULTS, hw_pixel_clock: 1, sample_period_us: 1 }).warnings.length, 1);
+  assert.equal(G.scanTiming(G.DEFAULTS).frameUs, 768 * 256 * 25);
+});
+
+test('galvo geometry: window, drag, scan path, point generators', () => {
+  assert.deepEqual(G.windowFromCenterWidth(2048, 1000), [1548, 2548]);
+  assert.deepEqual(G.windowFromCenterWidth(100, 400), [0, 400]);          // slides, does not shrink
+  assert.deepEqual(G.windowFromCenterWidth(4000, 400), [3695, 4095]);
+  const a = { x_min: 1000, x_max: 2000, y_min: 1000, y_max: 3000 };
+  assert.deepEqual(G.dragArea(a, 'move', -5000, 5000), { x_min: 0, x_max: 1000, y_min: 2095, y_max: 4095 });
+  assert.deepEqual(G.dragArea(a, 'se', 100.4, -50), { ...a, x_max: 2100, y_max: 2950 });
+  assert.deepEqual(G.dragArea(a, 'nw', 5000, 5000), { ...a, x_min: 1999, y_min: 2999 });   // never inverts
+  const path = G.rasterPath({ nx: 3, ny: 2, x_min: 0, x_max: 100, y_min: 0, y_max: 50, bidirectional: true });
+  assert.deepEqual(path.map((p) => [p.x, p.y]), [[0, 0], [50, 0], [100, 0], [100, 50], [50, 50], [0, 50]]);
+  assert.equal(G.rasterPath({ ...G.DEFAULTS, nx: 512, ny: 512 }).length, 64 * 64);   // preview is capped
+  assert.deepEqual(G.circlePoints(2048, 2048, 1000, 4, 7),
+    [{ x: 3048, y: 2048, dwell_us: 7 }, { x: 2048, y: 3048, dwell_us: 7 }, { x: 1048, y: 2048, dwell_us: 7 }, { x: 2048, y: 1048, dwell_us: 7 }]);
+  const win = { x_min: 0, x_max: 100, y_min: 0, y_max: 100 };
+  assert.deepEqual(G.gridPoints(win, 2, 2, 5).map((p) => [p.x, p.y]), [[0, 0], [100, 0], [0, 100], [100, 100]]);
+  assert.deepEqual(G.gridPoints(win, 1, 1, 5).map((p) => [p.x, p.y]), [[50, 50]]);
 });

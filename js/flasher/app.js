@@ -8,6 +8,7 @@ import { eraseFlash } from './erase.js';
 import { initHardwareTest } from './hwtest.js';
 import { initCan } from './can.js';
 import { initScan } from './scan.js';
+import { initGalvo } from './galvo.js';
 import * as M from './microscope.js';
 
 const $ = (id) => document.getElementById(id);
@@ -275,6 +276,7 @@ function setupConsole() {
     'Board info': C.stateGet(), 'Positions': C.motorGet(), 'Modules': C.modulesGet(),
     'CAN status': C.canGet(), 'CAN scan': C.canScan(), 'Routing table': C.routeGet(),
     'Move X +1000': C.motorMove(1, 1000), 'LED white': C.ledFill(255, 255, 255),
+    'Galvo status': C.galvoGet(), 'Galvo stop': C.galvoStop(),
   };
   const ex = $('commandExamples');
   for (const [label, cmd] of Object.entries(examples)) {
@@ -352,6 +354,7 @@ async function init() {
   initHardwareTest();
   initCan();
   initScan();
+  initGalvo();
   renderBoards();
   serial.updateStatus();
   if (p.has('canid')) $('ownNodeId').value = p.get('canid');

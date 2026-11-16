@@ -41,6 +41,37 @@ export const ledHalves = (region, r, g, b) => ({ task: '/ledarr_act', led: { act
 export const ledRings = (radius, r, g, b) => ({ task: '/ledarr_act', led: { action: 'rings', radius, r, g, b } });
 export const ledSingle = (ledIndex, r, g, b) => ({ task: '/ledarr_act', led: { action: 'single', ledIndex, r, g, b } });
 
+// ── Galvo scanner (/galvo_act, /galvo_get) ───────────────────────────────
+export const GALVO_TRIGGER_MODES = ['AUTO', 'HIGH', 'LOW', 'CONTINUOUS'];
+export const GALVO_MAX_POINTS = 256;   // SCANNER_MAX_ARBITRARY_POINTS in the firmware
+const assertDac = (v, what) => {
+  if (!Number.isInteger(v) || v < 0 || v > 4095) throw new Error(`${what} must be a whole number 0–4095 (12-bit DAC)`);
+};
+// Starts a raster scan. cfg = the firmware's ScanConfig keys (nx, ny, x_min … hw_pixel_clock).
+// bidirectional must be a JSON bool: the board's local parser tests cJSON_IsTrue, a 1 is ignored.
+export const galvoScan = (cfg) => ({ task: '/galvo_act', qid: qid(), config: { ...cfg, bidirectional: !!cfg.bidirectional } });
+export const galvoStop = () => ({ task: '/galvo_act', qid: qid(), stop: true });
+// Stops the scan and parks the beam at a fixed DAC position.
+export function galvoGoto(x, y) {
+  assertDac(x, 'x'); assertDac(y, 'y');
+  return { task: '/galvo_act', qid: qid(), galvo: { x, y } };
+}
+// Loops over the points until stopped. The board reads x, y and dwell_us only.
+export function galvoPoints(points, trigger = 'AUTO') {
+  if (!GALVO_TRIGGER_MODES.includes(trigger)) throw new Error(`trigger must be one of ${GALVO_TRIGGER_MODES.join(', ')}`);
+  if (!points.length || points.length > GALVO_MAX_POINTS) throw new Error(`1–${GALVO_MAX_POINTS} points`);
+  points.forEach((p, i) => {
+    assertDac(p.x, `point ${i + 1} x`); assertDac(p.y, `point ${i + 1} y`);
+    if (!Number.isInteger(p.dwell_us) || p.dwell_us < 0) throw new Error(`point ${i + 1}: dwell must be a whole number of µs`);
+  });
+  return { task: '/galvo_act', qid: qid(), laser_trigger: trigger, points: points.map(({ x, y, dwell_us }) => ({ x, y, dwell_us })) };
+}
+export function galvoTrigger(mode) {
+  if (!GALVO_TRIGGER_MODES.includes(mode)) throw new Error(`mode must be one of ${GALVO_TRIGGER_MODES.join(', ')}`);
+  return { task: '/galvo_act', qid: qid(), laser_trigger: mode };
+}
+export const galvoGet = () => ({ task: '/galvo_get', qid: qid() });
+
 // ── TMC2209 ──────────────────────────────────────────────────────────────
 export function tmcSet(axis, values) {
   const cmd = { task: '/tmc_act', axis };

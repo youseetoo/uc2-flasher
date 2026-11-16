@@ -155,3 +155,25 @@
 body:not(.server-mode) .server-only,
 body:not(.server-available) .server-available,
 body.server-mode .webserial-only { display: none !important; }
+
+/* Galvo tab: scan preview and line-timing plot */
+.galvo-canvas {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  height: auto;
+  margin: 0 auto;
+  background-color: #0a0a15;
+  border: 1px solid #444;
+  border-radius: 4px;
+  touch-action: none;
+  user-select: none;
+}
+.galvo-sw {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.25em;
+  border-radius: 2px;
+  vertical-align: -0.05em;
+}

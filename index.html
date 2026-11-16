@@ -61,6 +61,7 @@
         <li class="nav-item server-only"><button class="nav-link" id="microscope-tab" data-bs-toggle="tab" data-bs-target="#microscope-pane" type="button"><i class="bi bi-hdd-network"></i> Microscope</button></li>
         <li class="nav-item"><button class="nav-link" id="test-tab" data-bs-toggle="tab" data-bs-target="#test-pane" type="button"><i class="bi bi-sliders"></i> Test</button></li>
         <li class="nav-item"><button class="nav-link" id="scan-tab" data-bs-toggle="tab" data-bs-target="#scan-pane" type="button"><i class="bi bi-grid-3x3-gap"></i> Scan</button></li>
+        <li class="nav-item"><button class="nav-link" id="galvo-tab" data-bs-toggle="tab" data-bs-target="#galvo-pane" type="button"><i class="bi bi-bullseye"></i> Galvo</button></li>
         <li class="nav-item"><button class="nav-link" id="configure-tab" data-bs-toggle="tab" data-bs-target="#configure-pane" type="button"><i class="bi bi-diagram-3"></i> Configure CAN</button></li>
         <li class="nav-item"><button class="nav-link" id="erase-tab" data-bs-toggle="tab" data-bs-target="#erase-pane" type="button"><i class="bi bi-eraser"></i> Erase</button></li>
         <li class="nav-item"><button class="nav-link" id="help-tab" data-bs-toggle="tab" data-bs-target="#help-pane" type="button"><i class="bi bi-question-circle"></i> Help</button></li>
@@ -428,6 +429,133 @@
                 </div>
               </div>
               <div class="console-slot"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════ GALVO ═══════════════ -->
+        <div class="tab-pane fade" id="galvo-pane" role="tabpanel">
+          <div class="row g-4">
+            <div class="col-lg-7">
+              <div id="galvoIssues" class="hidden"></div>
+
+              <div id="galvoRasterBlock">
+                <div class="card mb-3">
+                  <div class="card-header"><h5 class="mb-0"><i class="bi bi-aspect-ratio"></i> Resolution &amp; scan window</h5></div>
+                  <div class="card-body">
+                    <div class="row g-2 small mb-3" id="galvoRes"></div>
+                    <div id="galvoWindow"></div>
+                    <div class="d-flex flex-wrap gap-1 align-items-center">
+                      <span class="small text-muted me-1">Presets</span>
+                      <button class="btn btn-sm btn-outline-secondary" data-galvo-preset="64">64²</button>
+                      <button class="btn btn-sm btn-outline-secondary" data-galvo-preset="256">256²</button>
+                      <button class="btn btn-sm btn-outline-secondary" data-galvo-preset="512">512²</button>
+                      <button class="btn btn-sm btn-outline-secondary" data-galvo-preset="full">Full range</button>
+                      <button class="btn btn-sm btn-outline-secondary" data-galvo-preset="center50">Center 50 %</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="card mb-3">
+                  <div class="card-header"><h5 class="mb-0"><i class="bi bi-stopwatch"></i> Timing &amp; frames</h5></div>
+                  <div class="card-body">
+                    <div class="row g-2 small" id="galvoTiming"></div>
+                    <div class="small mt-2 p-2 rounded bg-light" id="galvoInfo"></div>
+                  </div>
+                </div>
+                <div class="card mb-3">
+                  <div class="card-header"><h5 class="mb-0"><i class="bi bi-sliders2"></i> Line profile &amp; triggers</h5></div>
+                  <div class="card-body">
+                    <svg id="galvoProfile" class="galvo-canvas" viewBox="0 0 400 176" role="img" aria-label="X mirror position over two scan lines"></svg>
+                    <div class="small mt-1" id="galvoLegend"></div>
+                    <div class="form-text mt-0 mb-3">X position of the mirror per sample for two lines, as the board builds it. Below the trace: where the pixel clock, the frame / line markers and the laser gate are active.</div>
+                    <div class="row g-2 small" id="galvoAdv"></div>
+                    <div class="form-text">Over a CAN master (the galvo sits on a satellite) the current firmware forwards only NX, NY, the window, dwell, pre-blank / fly-back / settle samples, the trigger switch and bidirectional. Frame count, overscan, laser blanking, hardware clock, trigger delay / width and the LUT take effect on a board with its own galvo.</div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="galvoPointsBlock" class="hidden">
+                <div class="card mb-3">
+                  <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-record-circle"></i> Arbitrary points</h5>
+                    <span class="small text-muted" id="galvoPtsCount">0 / 256</span>
+                  </div>
+                  <div class="card-body">
+                    <div class="row g-2 small align-items-end">
+                      <div class="col-4"><label class="form-label mb-0" for="galvo_pts_dwell" title="Dwell time of each new point, in µs">Dwell (µs)</label><input type="number" class="form-control form-control-sm" id="galvo_pts_dwell" value="500" min="0" /></div>
+                      <div class="col-4"><label class="form-label mb-0" for="galvo_trigger" title="AUTO: laser pin high while dwelling, low while moving. HIGH / LOW force it. CONTINUOUS: high for the whole scan.">Laser trigger</label>
+                        <select class="form-select form-select-sm" id="galvo_trigger"><option>AUTO</option><option>HIGH</option><option>LOW</option><option>CONTINUOUS</option></select></div>
+                      <div class="col-4"><button class="btn btn-sm btn-outline-secondary w-100" id="galvoTriggerSet" data-needs-conn title="Set the laser trigger mode now, without sending points">Set now</button></div>
+                    </div>
+                    <div class="row g-2 small align-items-end mt-1">
+                      <div class="col-4"><label class="form-label mb-0" for="galvo_pts_n">Circle points</label><input type="number" class="form-control form-control-sm" id="galvo_pts_n" value="32" min="1" max="256" /></div>
+                      <div class="col-4"><button class="btn btn-sm btn-outline-primary w-100" id="galvoPtsCircle" title="Circle inscribed in the scan window">Circle</button></div>
+                      <div class="col-4"></div>
+                      <div class="col-2"><label class="form-label mb-0" for="galvo_pts_gx">Grid X</label><input type="number" class="form-control form-control-sm" id="galvo_pts_gx" value="4" min="1" max="256" /></div>
+                      <div class="col-2"><label class="form-label mb-0" for="galvo_pts_gy">Grid Y</label><input type="number" class="form-control form-control-sm" id="galvo_pts_gy" value="4" min="1" max="256" /></div>
+                      <div class="col-4"><button class="btn btn-sm btn-outline-primary w-100" id="galvoPtsGrid" title="Grid over the scan window (set it in Raster mode)">Grid</button></div>
+                      <div class="col-4"><button class="btn btn-sm btn-outline-danger w-100" id="galvoPtsClear">Clear</button></div>
+                    </div>
+                    <div class="form-text">Circle and grid use the scan window from Raster mode. You can also click in the preview to add points.</div>
+                    <div class="table-responsive mt-2" style="max-height: 260px; overflow-y: auto">
+                      <table class="table table-sm small mb-0">
+                        <thead><tr><th>#</th><th>X</th><th>Y</th><th>Dwell µs</th><th></th></tr></thead>
+                        <tbody id="galvoPtsBody"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card mb-3">
+                <div class="card-header"><h5 class="mb-0"><i class="bi bi-geo-alt"></i> Park / go to</h5></div>
+                <div class="card-body">
+                  <div class="row g-2 small align-items-end">
+                    <div class="col-3"><label class="form-label mb-0" for="galvo_park_x">X</label><input type="number" class="form-control form-control-sm" id="galvo_park_x" value="2048" min="0" max="4095" /></div>
+                    <div class="col-3"><label class="form-label mb-0" for="galvo_park_y">Y</label><input type="number" class="form-control form-control-sm" id="galvo_park_y" value="2048" min="0" max="4095" /></div>
+                    <div class="col-6 d-flex gap-1">
+                      <button class="btn btn-sm btn-primary" id="galvoPark" data-needs-conn>Go to</button>
+                      <button class="btn btn-sm btn-outline-primary" id="galvoCenter" data-needs-conn>Center</button>
+                    </div>
+                  </div>
+                  <div class="form-text">Stops a running scan and holds the beam at this DAC position (0–4095).</div>
+                </div>
+              </div>
+              <div class="console-slot"></div>
+            </div>
+
+            <div class="col-lg-5 order-first order-lg-last">
+              <div class="sticky-top" style="top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto">
+                <div class="card mb-3">
+                  <div class="card-header d-flex flex-wrap gap-2 align-items-center">
+                    <h5 class="mb-0 me-auto"><i class="bi bi-bullseye"></i> Galvo scanner (<code>/galvo_act</code>)</h5>
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Scan mode">
+                      <input type="radio" class="btn-check" name="galvoMode" id="galvoModeRaster" value="raster" checked />
+                      <label class="btn btn-outline-primary" for="galvoModeRaster"><i class="bi bi-grid-3x3-gap"></i> Raster</label>
+                      <input type="radio" class="btn-check" name="galvoMode" id="galvoModePoints" value="points" />
+                      <label class="btn btn-outline-primary" for="galvoModePoints"><i class="bi bi-record-circle"></i> Points</label>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="d-flex flex-wrap gap-2 align-items-center">
+                      <button class="btn btn-success" id="galvoStart" data-needs-conn><i class="bi bi-play-fill"></i> <span id="galvoStartLabel">Apply &amp; start scan</span></button>
+                      <button class="btn btn-danger" id="galvoStop" data-needs-conn><i class="bi bi-stop-fill"></i> Stop</button>
+                      <button class="btn btn-sm btn-outline-secondary" id="galvoRead" data-needs-conn title="Ask the board for its current scan config and fill the form"><i class="bi bi-download"></i> Read config</button>
+                      <button class="btn btn-sm btn-outline-secondary" id="galvoRefresh" data-needs-conn title="/galvo_get"><i class="bi bi-arrow-clockwise"></i> Status</button>
+                    </div>
+                    <div class="d-flex flex-wrap gap-1 mt-2" id="galvoChips"><span class="badge bg-secondary">no status yet</span></div>
+                    <div class="small mt-2" id="galvoMsg"></div>
+                  </div>
+                </div>
+
+                <div class="card mb-3">
+                  <div class="card-header"><h5 class="mb-0"><i class="bi bi-bounding-box"></i> Scan preview</h5></div>
+                  <div class="card-body p-2">
+                    <svg id="galvoPreview" class="galvo-canvas" viewBox="0 0 340 340" role="img" aria-label="Scan area in the 4096 by 4096 DAC range"></svg>
+                    <div class="small text-muted mt-1 text-center" id="galvoPreviewHint"></div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

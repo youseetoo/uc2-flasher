@@ -19,6 +19,11 @@ The page detects the server (`api/rx`) and switches to server mode by itself. Se
   `api/serial_send`, the board's output comes back through `api/rx`.
 - Erase is hidden (it needs WebSerial); Install has "erase the chip first".
 
+The **Galvo** tab (both modes) drives a galvo scanner board through `/galvo_act` and `/galvo_get`, like ImSwitch's
+`GalvoScannerController`: raster parameters (resolution, window, dwell, overscan, fly-back, triggers, laser blanking)
+with a draggable scan-area preview and a plot of the line profile the board will output, arbitrary points (click in
+the preview, circle/grid generators), park / go to, and "Read config" to fill the form from the board.
+
 The firmware logic is ImSwitch's `imswitch/imcontrol/model/canbus` (the code behind
 `UC2ConfigController`), pulled from GitHub at build time, not copied.
 
