@@ -128,8 +128,18 @@ test('galvo validation mirrors the board', () => {
   assert.equal(G.validate({ ...G.DEFAULTS, nx: 4000, fly_samples: 200, bidirectional: true, pre_samples: 0, overscan_samples: 0, line_settle_samples: 0 }).errors.length, 0);   // no fly-back counted
   assert.equal(G.lineSamples(G.DEFAULTS), 64 + 2 * 32 + 256 + 256 + 128);
   assert.match(G.validate({ ...G.DEFAULTS, x_min: 0, x_max: 4095 }).warnings[0], /overscan/);   // ramp past the DAC range is clipped
-  assert.equal(G.validate({ ...G.DEFAULTS, hw_pixel_clock: 1, sample_period_us: 1 }).warnings.length, 1);
-  assert.equal(G.scanTiming(G.DEFAULTS).frameUs, 768 * 256 * 25);
+  const fast = G.validate({ ...G.DEFAULTS, hw_pixel_clock: 1, sample_period_us: 1 }).warnings;
+  assert.equal(fast.length, 2);
+  assert.match(fast[0], /hardware pixel clock/);
+  assert.match(fast[1], /22 µs/);
+  // the as-found config of 2026-11-17: 1 µs dwell, no pre-blank, overscan or fly-back
+  const asFound = G.validate({ ...G.DEFAULTS, sample_period_us: 1, pre_samples: 0, overscan_samples: 0, fly_samples: 0, line_settle_samples: 0 });
+  assert.equal(asFound.errors.length, 0);
+  assert.equal(asFound.warnings.length, 3);
+  assert.equal(G.scanTiming(G.DEFAULTS).frameUs, 256 * (768 * 25 + G.LINE_OVERHEAD_US));   // 4.93 s, as measured
+  assert.equal(G.scanTiming({ ...G.DEFAULTS, sample_period_us: 0 }).frameUs, 0);
+  assert.deepEqual({ ...G.DEFAULTS, nx: 512, x_min: 900, sample_period_us: 1, ...G.FLIM_TIMING },
+    { ...G.DEFAULTS, nx: 512, x_min: 900 });   // the FLIM timing preset keeps resolution and window
 });
 
 test('galvo geometry: window, drag, scan path, point generators', () => {

@@ -133,6 +133,13 @@ export const BOARDS = {
     image: 'https://quantumminilabs.de/wp-content/uploads/2025/01/cropped-Quantumminilabs_Logo.png',
     description: 'qBOX ODMR server firmware.', docs: 'https://docs.openuc2.com/usage/disc/qbox/09_ODMR/',
   },
+  'odmr-xiao-esp32s3-beta': {
+    name: 'ODMR server, USB network for iPad (XIAO ESP32-S3, beta)', chip: 'ESP32-S3', category: 'qbox', source: 'static',
+    manifest: `${STATIC}/odmr-xiao-esp32s3-beta-manifest.json`,
+    image: 'https://quantumminilabs.de/wp-content/uploads/2025/01/cropped-Quantumminilabs_Logo.png',
+    description: 'ODMR server with USB serial + USB network: iPad/iPhone open http://192.168.7.1 over the cable. Test build from the odmr-s3-usb-network branch.',
+    docs: 'https://github.com/openUC2/TechnicalDocs-openUC2-QBox/tree/odmr-s3-usb-network/Production_Files/Software/ODMR_Server',
+  },
   'odmr-xiao-esp32c3': {
     name: 'ODMR server (XIAO ESP32-C3)', chip: 'ESP32-C3', category: 'qbox', source: 'static',
     manifest: `${STATIC}/odmr-xiao-esp32c3-manifest.json`,

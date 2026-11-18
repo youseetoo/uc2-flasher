@@ -55,6 +55,16 @@ export function validate(c) {
       warnings.push('The overscan ramp runs past the DAC range and is clipped, so the mirror is not at constant velocity at the line ends. Move the window inwards or reduce the overscan.');
     }
   }
+  // Settings that spoiled FLIM images in the bench test of 2026-11-17 (see DOCS_ARTEFACTS)
+  if (c.sample_period_us < 25) {
+    warnings.push('Dwell below 25 µs: the board needs about 22 µs per sample, so pixel times become uneven and frames take longer than shown.');
+  }
+  if (!c.bidirectional && !c.fly_samples) {
+    warnings.push('No fly-back: the mirror cannot jump back in one sample, so the first columns of every line are taken while it is still moving.');
+  }
+  if (!c.pre_samples && !c.overscan_samples) {
+    warnings.push('No pre-blank or overscan: the first pixels are taken while the mirror is still accelerating (squeezed left edge).');
+  }
   return { errors, warnings };
 }
 
@@ -88,12 +98,21 @@ export function lineProfile(c) {
 // Odd lines of a bidirectional scan run the same profile mirrored.
 export const mirrorLine = (p) => p.x.map((v) => clamp12(p.mirrorSum - v));
 
-// Frame time from the real line length (not just NX), at the configured dwell. Ignores the few µs of marker pulses.
+// Frame time from the real line length (not just NX), at the configured dwell, plus the Y step and
+// line marker at each line start (56 µs, measured at 25 µs dwell on 2026-11-17).
+export const LINE_OVERHEAD_US = 56;
 export function scanTiming(c) {
   const line = lineSamples(c);
-  const frameUs = line * c.ny * c.sample_period_us;
+  const frameUs = c.sample_period_us > 0 ? c.ny * (line * c.sample_period_us + LINE_OVERHEAD_US) : 0;
   return { line, pixels: c.nx * c.ny, frameUs, hz: frameUs > 0 ? 1e6 / frameUs : Infinity };
 }
+
+// What each parameter does, and where FLIM image artefacts come from
+export const DOCS_SCAN = 'https://docs.openuc2.com/usage/disc/galvo-addon/reference/scan-parameters';
+export const DOCS_ARTEFACTS = 'https://docs.openuc2.com/usage/disc/galvo-addon/explanation/flim-image-artefacts';
+// Timing part of DEFAULTS (the validated FLIM raster): the "FLIM timing" preset keeps resolution and window
+export const FLIM_TIMING = Object.fromEntries(Object.entries(DEFAULTS)
+  .filter(([k]) => !['nx', 'ny', 'x_min', 'x_max', 'y_min', 'y_max', 'frame_count'].includes(k)));
 
 // Scan path in DAC counts, at most max×max samples (like the ImSwitch preview); odd lines reversed when bidirectional.
 export function rasterPath(c, max = 64) {
@@ -148,19 +167,19 @@ export function gridPoints(a, gx, gy, dwell_us) {
 const HELP = {
   nx: 'Samples (pixels) per line. More = finer X resolution but slower lines.',
   ny: 'Lines per frame (Y resolution).',
-  sample_period_us: 'Dwell per sample in µs. 0 = as fast as the DAC loop allows. Longer = slower scan and brighter, less noisy pixels. If the status shows timing overruns the period is too short for the board.',
+  sample_period_us: 'Dwell per sample in µs = the pixel time; photons per pixel grow with it. The board needs about 22 µs per sample, so below 25 µs (and at 0) pixel times become uneven and frames take longer than shown. FLIM: 25.',
   frame_count: 'Frames to scan, then stop. 0 = scan until Stop. Only a board with its own galvo honours this; a raster started through a CAN master runs continuously.',
   bidirectional: 'Scan both ways: even lines left to right, odd lines right to left. About twice the frame rate, no fly-back, but needs a good phase/settle to avoid a zig-zag offset. The host must flip the odd lines.',
-  pre_samples: 'Blanking samples at the start of each line, before imaging. Lets the mirror settle. Increase if the left edge is smeared.',
-  overscan_samples: 'Extends the X ramp at the same per-pixel slope on both sides of the image, so the mirror already moves at constant velocity when triggers and laser start. Compensates the galvo lagging the DAC. Costs 2×overscan samples per line.',
-  fly_samples: 'Fly-back samples (cosine-eased) while the mirror returns for the next line. Not used when bidirectional. Increase if lines tear or overshoot.',
-  line_settle_samples: 'Samples held after the fly-back before the next line starts. Increase if the start of each line is distorted.',
-  trig_delay_us: 'Gap between the frame marker and the line marker at the start of a frame (µs). Both fire during pre-blanking, before the first pixel.',
-  trig_width_us: 'Pulse width in µs of the frame/line markers and the pixel clock (the pixel pulse is capped at half the dwell). 0 = fastest possible pulse.',
+  pre_samples: 'Samples at the start of each line, right after the Y step, with X held at the start of the ramp; the line (and frame) marker goes out here. In FLIM LABS PLF the photons of pre-blank + lead-in overscan pile into column 0: crop it with a left offset of 1. FLIM: 64.',
+  overscan_samples: 'Ramp samples before and after the image at the same per-pixel slope, so the mirror already moves at constant speed when the first pixel starts (without it the left edge is squeezed). Costs 2×overscan samples per line; the ramp must stay inside 0–4095. FLIM: 32.',
+  fly_samples: 'Samples for the cosine-eased return to the start of the ramp (not used when bidirectional). Too few and the mirror cannot get back in time: the first columns of each line are distorted; 0 gave a dark, squeezed band at the left edge. FLIM: 256.',
+  line_settle_samples: 'Samples held at the start of the ramp after the fly-back, before the next Y step, so ringing decays before the next line. FLIM: 128.',
+  trig_delay_us: 'Gap between the frame marker and the line marker at the start of a frame (µs). Does not delay the pixel pulses.',
+  trig_width_us: 'Pulse width in µs. Frame/line markers: 0 = 1 µs. Pixel pulse: software clock 0 = a few tens of ns (capped at half the dwell), hardware clock 0 = 1 µs. The PLF pixel size is set by the dwell, not by this. FLIM: 0.',
   enable_trigger: 'Emit the frame, line and pixel trigger outputs during the scan.',
   apply_x_lut: 'Linearise the mirror with the per-column X lookup table (needs an uploaded LUT).',
-  laser_blanking: 'Gate the laser pin HIGH only during the image: off during pre-blanking, overscan, fly-back and settle. Stops fly-back light from smearing the image (e.g. into a FLIM acquisition).',
-  hw_pixel_clock: 'Make the pixel clock with the ESP32-S3 RMT peripheral: exactly NX hardware-timed pulses per line, independent of the DAC loop. Falls back to software pulses on other chips.',
+  laser_blanking: 'Gate the laser output HIGH only during the image samples (off during pre-blank, overscan, fly-back and settle). On the XIAO galvo board this pin (GPIO43) is also the console UART TX. FLIM: off.',
+  hw_pixel_clock: 'Make the pixel pulses with the ESP32-S3 RMT peripheral instead of the software loop. Removes the faint 1 ms dot lattice and the brighter columns 32/96/160/224 that interrupts cause with the software clock (bench test 2026-11-17). Needs dwell ≥ 2 µs and NX ≤ 1023, otherwise software pulses. Validated FLIM default: off.',
 };
 const LABEL = {
   nx: 'NX (pixels/line)', ny: 'NY (lines)', sample_period_us: 'Dwell (µs/sample)', frame_count: 'Frame count',
@@ -340,8 +359,8 @@ function render(skip) {
   }));
   box.classList.toggle('hidden', !errors.length && !warnings.length);
   const t = scanTiming(c);
-  $('galvoInfo').textContent = `${t.pixels.toLocaleString()} pixels · ${t.line} samples/line · `
-    + (c.sample_period_us > 0 ? `frame ≈ ${(t.frameUs / 1000).toFixed(t.frameUs < 1e5 ? 1 : 0)} ms (${t.hz.toFixed(1)} Hz)` : 'dwell 0 = as fast as the DAC loop allows');
+  $('galvoInfo').textContent = `${t.pixels.toLocaleString()} pixels · ${t.line} samples/line, ${Math.round((100 * c.nx) / Math.max(t.line, 1))} % on image pixels · `
+    + (c.sample_period_us > 0 ? `frame ≈ ${t.frameUs >= 1e6 ? `${(t.frameUs / 1e6).toFixed(2)} s` : `${(t.frameUs / 1000).toFixed(1)} ms`} (${t.hz.toFixed(2)} Hz)` : 'dwell 0 = as fast as the DAC loop allows');
   $('galvoPreview').innerHTML = previewHtml(c);
   $('galvoProfile').innerHTML = profileHtml(c);
   $('galvoLegend').innerHTML = legendHtml(c);
@@ -380,7 +399,7 @@ function showStatus(m) {
   if (m.current_frame !== undefined) out.push(chip(`frame ${m.current_frame}`, 'bg-light text-dark border'), chip(`line ${m.current_line}`, 'bg-light text-dark border'));
   if (m.scan_mode) out.push(chip(String(m.scan_mode).toLowerCase(), 'bg-info text-dark', 'scan mode'));
   if (m.trigger_mode) out.push(chip(`laser ${String(m.trigger_mode).toLowerCase()}`, 'bg-info text-dark', 'laser trigger mode'));
-  if (m.timing_overruns) out.push(chip(`${m.timing_overruns} timing overruns`, 'bg-warning text-dark', 'The DAC loop missed the sample period: raise the dwell'));
+  if (m.timing_overruns) out.push(chip(`${m.timing_overruns} timing overruns`, 'bg-warning text-dark', 'Samples that started more than one dwell late. About 1000 per frame at 25 µs are normal with the current firmware (interrupts on the scan core); if nearly every sample overruns, the dwell is below what the board can do (about 22 µs).'));
   if (m.x !== undefined) out.push(chip(`x ${m.x} · y ${m.y}`, 'bg-light text-dark border', 'position read from the satellite'));
   $('galvoChips').replaceChildren(...out);
 }
@@ -472,6 +491,7 @@ export function initGalvo() {
   const PRESETS = {
     '64': { nx: 64, ny: 64 }, '256': { nx: 256, ny: 256 }, '512': { nx: 512, ny: 512 },
     full: { x_min: 0, x_max: DAC_MAX, y_min: 0, y_max: DAC_MAX }, center50: { x_min: 1024, x_max: 3072, y_min: 1024, y_max: 3072 },
+    flim: FLIM_TIMING,
   };
   document.querySelectorAll('[data-galvo-preset]').forEach((b) => b.addEventListener('click', () => {
     writeCfg({ ...readCfg(), ...PRESETS[b.dataset.galvoPreset] });
